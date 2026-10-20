@@ -296,8 +296,10 @@ tdx_table_list() {
     v=${v//$',\n'/,}
     v=${v//$'\n,'/,}
     v=${v//$'\n'/,}
-    local IFS=,
-    for item in $v; do
+    v+=,
+    while [[ $v == *,* ]]; do
+        item=${v%%,*}
+        v=${v#*,}
         item=$(tdx_strip "$item")
         [[ -n $item ]] || { TDX_ERR="empty table name in table list"; return 2; }
         [[ $item == *[{}]* ]] && { TDX_ERR="unexpected brace in table list"; return 2; }
@@ -331,7 +333,7 @@ tdx_load_sources() {
     tdx_ini_read "$path" || tdx_config_error "cannot parse $path: $TDX_INI_ERR"
     T_KEYS=()
     T_DB=() T_TABLE=() T_CDC=() T_CHUNK=() T_WHERE=() T_LABEL=()
-    local -A list_of=() list_db=() list_tb=() single_of=() seen=()
+    local -A list_of=() list_db=() list_tb=() single_of=()
     local -A is_list=()
     # pass 1: validate sections, index list members and one-table sections
     for label in "${INI_SECS[@]}"; do
@@ -370,7 +372,6 @@ tdx_load_sources() {
         tdx_get "$label" database ""
         key="$REPLY.$(tdx_strip "${INI_V["$label${TDX_US}table"]}")"
         key=${key^^}
-        [[ -n ${list_of[$key]+x} ]] || continue
         [[ -n ${single_of[$key]+x} ]] &&
             tdx_config_error "$path: table $key defined twice ([${single_of[$key]}] and [$label])"
         single_of[$key]=$label
@@ -411,8 +412,6 @@ tdx_load_sources() {
         tdx_get_bool "$label" enabled 1
         [[ $REPLY == 1 ]] || continue
         tdx_source_opts "$path" "$label" "$key"
-        [[ -n ${seen[$key]+x} ]] && tdx_config_error "$path: table $key defined twice"
-        seen[$key]=1
         T_DB[$key]=$db
         T_TABLE[$key]=$tb
         T_LABEL[$key]=$label

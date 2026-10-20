@@ -140,8 +140,8 @@ enabled = true              ; optional
 - `table` is a list when it contains a comma or a newline, or is wrapped in `{...}`;
   otherwise it is a single table name (the original one-table form, unchanged).
 - A list section with any key other than `database`/`table`, unbalanced braces, an empty
-  list item, a table in two list sections, or two one-table sections for the same table is
-  a configuration error (exit 2).
+  list item, a table in two list sections, or two one-table sections for the same table
+  (even disabled ones) is a configuration error (exit 2).
 - A table both listed and given a one-table section: `database`/`table` come from the list
   (the list takes priority), `cdc_column`/`chunk_column`/`where`/`enabled` from the
   one-table section, and a WARNING is logged.

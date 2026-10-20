@@ -341,12 +341,16 @@ test_table_list_config_errors() {
     tt_env_new
     local -a bad
     local case_
-    for case_ in extra_key dup_list unbalanced empty_item dup_single; do
+    for case_ in extra_key dup_list unbalanced empty_item trailing_brace trailing_plain dup_single dup_disabled; do
         case $case_ in
             extra_key) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED, BIG}' 'cdc_column = UPDATED_TS' ;;
             dup_list) it_tables_raw '[a]' 'database = TDX_DB' 'table = {MIXED, BIG}' '[b]' 'database = TDX_DB' 'table = {BIG}' ;;
             unbalanced) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED, BIG' ;;
             empty_item) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED,,BIG}' ;;
+            trailing_brace) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED,}' ;;
+            trailing_plain) it_tables_raw '[t]' 'database = TDX_DB' 'table = MIXED, BIG,,' ;;
+            dup_disabled) it_tables_raw '[a]' 'database = TDX_DB' 'table = MIXED' 'enabled = false' \
+                '[b]' 'database = TDX_DB' 'table = MIXED' ;;
             dup_single) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED, BIG}' \
                 '[b1]' 'database = TDX_DB' 'table = BIG' '[b2]' 'database = TDX_DB' 'table = BIG' ;;
         esac
@@ -354,4 +358,15 @@ test_table_list_config_errors() {
         assert_rc 2 "$TDX_RC" "$case_: $TDX_OUT$TDX_ERR"
     done
     assert_eq 0 "$(tt_fake_calls)"
+}
+
+test_table_list_names_are_literal() {
+    tt_env_new
+    : >"$TDX_TMP/MIXED_FILE"; : >"$TDX_TMP/MIXED_OTHER"
+    it_tables_raw '[tdx]' 'database = TDX_DB' 'table = {MIXED*, BIG}'
+    tt_run --dry-run
+    assert_rc 0 "$TDX_RC" "$TDX_OUT$TDX_ERR"
+    assert_not_contains "$TDX_OUT$TDX_ERR" "MIXED_FILE"
+    tt_run --status
+    assert_contains "$TDX_OUT" "TDX_DB.MIXED*"
 }

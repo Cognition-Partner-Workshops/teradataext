@@ -270,8 +270,8 @@ one-table section therefore switches the listed table off.
 
 Configuration errors (exit code 2): any key other than database/table in a list section,
 unbalanced braces or an empty name in a list, a table in two list sections, two one-table
-sections for the same table. Tables are processed in file order (list members at their
-list section's position).
+sections for the same table (even if one has enabled = false). Tables are processed in
+file order (list members at their list section's position).
 
 The table key used in process_state.ini, in metadata/audit and on the command line is
 DATABASE.TABLE upper-cased (SALES.ORDERS); --tables matches it case-insensitively. File

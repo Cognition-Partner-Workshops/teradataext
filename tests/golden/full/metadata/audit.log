@@ -1,0 +1,3 @@
+<TS> | <LAST_RUN_ID> | TDX_DB.MIXED | done | rows=4 | files=1 | chunks=1/1 | method=bteq | elapsed=<S>s | watermark=- | ok
+<TS> | <LAST_RUN_ID> | TDX_DB.BIG | done | rows=25 | files=4 | chunks=4/4 | method=fexp | elapsed=<S>s | watermark=- | ok
+<TS> | <LAST_RUN_ID> | TDX_DB.CDC | done | rows=3 | files=1 | chunks=1/1 | method=fexp | elapsed=<S>s | watermark=-->2024-03-01 00:00:00.000000 | ok

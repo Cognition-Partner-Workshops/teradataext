@@ -1,0 +1,86 @@
+# tdxfake fixture (see tests/fakes/README.md): basic
+# <DB.TABLE> TAB <key> TAB <value>...   or   failure TAB key=value ...
+
+TDX_DB.MIXED	table
+TDX_DB.MIXED	column	1	ID	I	4	\N	\N	N	0
+TDX_DB.MIXED	column	2	AMT	D	8	10	2	Y	0
+TDX_DB.MIXED	column	3	BIG_AMT	D	16	38	4	Y	0
+TDX_DB.MIXED	column	4	NAME	CV	50	\N	\N	Y	1
+TDX_DB.MIXED	column	5	BIZ_DATE	DA	4	\N	\N	Y	0
+TDX_DB.MIXED	column	6	CREATED_TS	TS	26	\N	6	Y	0
+TDX_DB.MIXED	column	7	EVENT_TSZ	SZ	32	\N	6	Y	0
+TDX_DB.MIXED	column	8	PAYLOAD	BV	16	\N	\N	Y	0
+TDX_DB.MIXED	index	P	Y	1	ID
+TDX_DB.MIXED	stats_rows	\N
+TDX_DB.MIXED	count	4
+TDX_DB.MIXED	row_max	200
+TDX_DB.MIXED	cdc_max	\N
+TDX_DB.MIXED	minmax	ID	1	4
+TDX_DB.MIXED	row	1|12.34|"12345678901234567890.1234"|a\|b|2024-01-01|2024-01-01T10:00:00.000000|2024-01-01T08:00:00.000000Z|0A0B
+TDX_DB.MIXED	row	2|-0.50|"-1.0000"|c\\d|2024-02-29|2024-02-29T23:59:59.999999|2024-02-29T22:00:00.000000Z|\E
+TDX_DB.MIXED	row	3|\N|\N|line1\%0Aline2|\N|\N|\N|\N
+TDX_DB.MIXED	row	4|0.00|"0.0000"|\E|1999-12-31|1999-12-31T00:00:00.000000|1999-12-31T05:30:00.000000Z|FF
+
+TDX_DB.BIG	table
+TDX_DB.BIG	column	1	ID	I	4	\N	\N	N	0
+TDX_DB.BIG	column	2	VAL	CV	20	\N	\N	Y	1
+TDX_DB.BIG	index	P	N	1	ID
+TDX_DB.BIG	stats_rows	25
+TDX_DB.BIG	count	25
+TDX_DB.BIG	row_max	20
+TDX_DB.BIG	cdc_max	\N
+TDX_DB.BIG	minmax	ID	1	25
+TDX_DB.BIG	row	1|value 01
+TDX_DB.BIG	row	2|value 02
+TDX_DB.BIG	row	3|value 03
+TDX_DB.BIG	row	4|value 04
+TDX_DB.BIG	row	5|value 05
+TDX_DB.BIG	row	6|value 06
+TDX_DB.BIG	row	7|value 07
+TDX_DB.BIG	row	8|value 08
+TDX_DB.BIG	row	9|value 09
+TDX_DB.BIG	row	10|value 10
+TDX_DB.BIG	row	11|value 11
+TDX_DB.BIG	row	12|value 12
+TDX_DB.BIG	row	13|value 13
+TDX_DB.BIG	row	14|value 14
+TDX_DB.BIG	row	15|value 15
+TDX_DB.BIG	row	16|value 16
+TDX_DB.BIG	row	17|value 17
+TDX_DB.BIG	row	18|value 18
+TDX_DB.BIG	row	19|value 19
+TDX_DB.BIG	row	20|value 20
+TDX_DB.BIG	row	21|value 21
+TDX_DB.BIG	row	22|value 22
+TDX_DB.BIG	row	23|value 23
+TDX_DB.BIG	row	24|value 24
+TDX_DB.BIG	row	25|value 25
+
+TDX_DB.CDC	table
+TDX_DB.CDC	column	1	ID	I	4	\N	\N	N	0
+TDX_DB.CDC	column	2	VAL	CV	20	\N	\N	Y	1
+TDX_DB.CDC	column	3	UPDATED_TS	TS	26	\N	6	N	0
+TDX_DB.CDC	index	P	Y	1	ID
+TDX_DB.CDC	stats_rows	5
+TDX_DB.CDC	count	5
+TDX_DB.CDC	row_max	60
+TDX_DB.CDC	cdc_max	2024-03-01 00:00:00.000000
+TDX_DB.CDC	minmax	ID	1	5
+TDX_DB.CDC	row	1|jan|2024-01-01T00:00:00.000000	2024-01-01 00:00:00.000000
+TDX_DB.CDC	row	2|feb|2024-02-01T00:00:00.000000	2024-02-01 00:00:00.000000
+TDX_DB.CDC	row	3|mar|2024-03-01T00:00:00.000000	2024-03-01 00:00:00.000000
+TDX_DB.CDC	row	4|apr|2024-04-01T00:00:00.000000	2024-04-01 00:00:00.000000
+TDX_DB.CDC	row	5|apr2|2024-04-15T00:00:00.000000	2024-04-15 00:00:00.000000
+
+TDX_DB.LOB_BIG	table
+TDX_DB.LOB_BIG	column	1	ID	I	4	\N	\N	N	0
+TDX_DB.LOB_BIG	column	2	NOTES	CO	2097152	\N	\N	Y	1
+TDX_DB.LOB_BIG	index	P	Y	1	ID
+TDX_DB.LOB_BIG	stats_rows	2
+TDX_DB.LOB_BIG	count	2
+TDX_DB.LOB_BIG	row_max	50010
+TDX_DB.LOB_BIG	cdc_max	\N
+TDX_DB.LOB_BIG	minmax	ID	1	2
+TDX_DB.LOB_BIG	lob_max	NOTES	50000
+TDX_DB.LOB_BIG	row	1|short
+TDX_DB.LOB_BIG	row	2|xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

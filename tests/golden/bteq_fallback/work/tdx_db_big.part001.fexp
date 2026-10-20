@@ -1,0 +1,7 @@
+.LOGTABLE tdx_lt_<H>;
+.LOGON tdfake.example.com/tdx_test_user,********
+.BEGIN EXPORT SESSIONS 1 TENACITY 0;
+.EXPORT OUTFILE <ROOT>/data/tdx_db_big.part001.dat.raw FORMAT TEXT MODE RECORD;
+/* TDX query=export db=TDX_DB table=BIG chunk=1/4 */ SELECT CAST((CASE WHEN "ID" IS NULL THEN '\N' ELSE TRIM(CAST("ID" AS VARCHAR(25))) END) || '|' || (CASE WHEN "VAL" IS NULL THEN '\N' WHEN CHARACTER_LENGTH("VAL") = 0 THEN '\E' ELSE OREPLACE(OREPLACE(OREPLACE(OREPLACE("VAL", '\', '\\'), '|', '\|'), '0D'XC, '\' || '0D'XC), '0A'XC, '\' || '0A'XC) END) AS VARCHAR(64000)) AS tdx_rec FROM "TDX_DB"."BIG" WHERE ("ID" < 8 OR "ID" IS NULL);
+.END EXPORT;
+.LOGOFF;

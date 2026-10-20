@@ -1,0 +1,10 @@
+.SET SESSION CHARSET 'ASCII';
+.LOGON tdfake.example.com/tdx_test_user,********
+.SET ERROROUT STDOUT;
+.SET ERRORLEVEL UNKNOWN SEVERITY 8;
+.EXPORT DATA FILE = <ROOT>/work/tdx_db_big.minmax.q1.raw;
+/* TDX query=minmax db=TDX_DB table=BIG col=ID */ SELECT COALESCE(OREPLACE(OREPLACE(TRIM(CAST(MIN("ID") AS VARCHAR(256)))), '\', '\\'), '|', '\|'), '\N') || '|' || COALESCE(OREPLACE(OREPLACE(TRIM(CAST(MAX("ID") AS VARCHAR(256)))), '\', '\\'), '|', '\|'), '\N') FROM "TDX_DB"."BIG";
+.IF ERRORCODE <> 0 THEN .QUIT 8;
+.EXPORT RESET;
+.LOGOFF;
+.QUIT 0;

@@ -85,9 +85,8 @@ Teradata user rights (logon user)
   3. Check the tools:      fexp -h ; bteq -h ; python3.12 --version
      (if python3.12 is not the default interpreter: export TDX_PYTHON=/path/to/python3.12)
   4. Edit config/main_config.ini (at least [teradata] host) and config/source_tables.ini.
-  5. Delete the sample config/process_state.ini shipped with the utility. The real file is
-     created on the first run; leaving the sample in place would make its example tables
-     look already extracted.
+  5. config/process_state.ini.example shows the state format only. The real
+     config/process_state.ini is created on the first run; do not copy the example there.
   6. Provide credentials (section 4).
   7. Validate without connecting:   ./teradata_extract.sh --dry-run
 
@@ -295,8 +294,8 @@ Restart behaviour:
 ------------------------------------------------------------------------------------------
 
 A table whose estimated row count exceeds chunk_threshold_rows is split into chunks of
-about chunk_rows rows, at most max_chunks chunks (the exact chunk-count calculation is an
-engine detail). Each chunk is an independent job with its own file
+about chunk_rows rows: n = max(2, min(max_chunks, ceil(estimated_rows / chunk_rows))).
+Range chunking may use fewer chunks when the key range has fewer distinct values than n. Each chunk is an independent job with its own file
 <db>_<table>.partNNN.dat (NNN = 1-based chunk number, 3 digits) and its own state.
 
 Chunk column / strategy:

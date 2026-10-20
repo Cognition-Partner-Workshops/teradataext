@@ -211,11 +211,15 @@ def _parse_layout(data: bytes, rec_prefix: bool, eor: bool) -> list[bytes] | Non
     return out
 
 
-def parse_raw_export(data: bytes) -> tuple[list[bytes], str]:
-    """Decode a FastExport TEXT / BTEQ DATA export of one VARCHAR column."""
+def parse_raw_export(data: bytes, tool: str = "bteq") -> tuple[list[bytes], str]:
+    """Decode a FastExport TEXT / BTEQ DATA export of one VARCHAR column.
+
+    The tool's documented layout is tried first; the others are fallbacks.
+    """
     if not data:
         return [], "empty"
-    for rec_prefix, eor in LAYOUTS:
+    preferred = (True, True) if tool == "bteq" else (False, True)
+    for rec_prefix, eor in (preferred, *(x for x in LAYOUTS if x != preferred)):
         records = _parse_layout(data, rec_prefix, eor)
         if records is not None:
             name = ("reclen+" if rec_prefix else "") + "varchar" + ("+eor" if eor else "")
@@ -827,7 +831,7 @@ class ToolRunner:
         results = []
         for r in raws:
             data = r.read_bytes() if r.exists() else b""
-            records, _ = parse_raw_export(data)
+            records, _ = parse_raw_export(data, "bteq")
             rows = []
             for rec in records:
                 text = rec.decode("utf-8", errors="strict")
@@ -1517,7 +1521,7 @@ class Extractor:
                     continue
                 raise
         data = raw.read_bytes() if raw.exists() else b""
-        records, layout = parse_raw_export(data)
+        records, layout = parse_raw_export(data, method)
         want = len(w.rules)
         delim = s.delimiter.encode()
         for i, rec in enumerate(records, start=1):

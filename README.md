@@ -37,7 +37,8 @@ src/extract.py                    engine (single module, stdlib only)
 config/
   main_config.ini                 main configuration (user-maintained)
   source_tables.ini               tables to extract (user-maintained)
-  process_state.ini               extraction state (MACHINE-MANAGED; sample shipped)
+  process_state.ini               extraction state (MACHINE-MANAGED, created on first run)
+  process_state.ini.example       sample of the state format
   credentials.ini.example         credentials file template
   utility_user_guide.txt          operator guide
 docs/DESIGN.md                    interface contract
@@ -57,7 +58,6 @@ python3.12 --version && which fexp bteq
 # 2. configure
 vi config/main_config.ini          # [teradata] host, logtable_database, ...
 vi config/source_tables.ini        # tables to extract
-rm config/process_state.ini        # remove the shipped SAMPLE state before the first run
 
 # 3. credentials (preferred: environment variables)
 export TD_USER=etl_user

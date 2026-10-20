@@ -1,10 +1,9 @@
 # THIS FILE IS MANAGED BY teradata_extract - DO NOT EDIT.
 # Use --reset-table / --reset-watermark / --new-cycle to change extraction state.
 #
-# SAMPLE ONLY: this file shows the format written by the utility (the real file is created
-# on the first run and rewritten atomically after every chunk/table transition). DELETE this
-# sample before the first real run, otherwise its entries (done tables, CDC watermark) are
-# taken as real extraction state.
+# SAMPLE ONLY: this file shows the format of config/process_state.ini, which the utility
+# creates on the first run and rewrites atomically after every chunk/table transition.
+# Do not copy it to process_state.ini: its entries would be taken as real state.
 
 [_run]
 cycle_id = 20261020T013200Z

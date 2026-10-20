@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+config/process_state.ini
+data/
+metadata/
+logs/
+work/

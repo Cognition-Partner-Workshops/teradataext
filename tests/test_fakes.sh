@@ -36,7 +36,7 @@ fk_fexp() {   # fk_fexp MARKER [OUT] -> FK_RC FK_OUT
 # fk_parse fexp|bteq FILE: records (%-encoded, one per line); fails on a malformed layout
 fk_parse() {
     local out
-    out=$(od -An -v -tu1 "$2" | tdx_awk -v bteq="$([ "$1" = bteq ] && echo 1 || echo 0)" '
+    out=$(od -An -v -tu1 "$2" | tt_awk -v bteq="$([ "$1" = bteq ] && echo 1 || echo 0)" '
         { for (i = 1; i <= NF; i++) b[n++] = $i + 0 }
         END {
             for (i = 1; i < 256; i++) chr[i] = sprintf("%c", i)
@@ -53,14 +53,14 @@ fk_parse() {
                 gsub(/%/, "%25", r); gsub(/\t/, "%09", r); gsub(/\n/, "%0A", r); gsub(/\r/, "%0D", r)
                 print r
             }
-        }') || tdx_fail "bad $1 layout in $2: $out"
+        }') || tt_fail "bad $1 layout in $2: $out"
     printf '%s' "$out"
 }
 
 test_executable() {
     local t
     for t in fexp bteq; do
-        [ -x "$TDX_FAKES_DIR/$t" ] || tdx_fail "$t not executable"
+        [ -x "$TDX_FAKES_DIR/$t" ] || tt_fail "$t not executable"
         assert_eq '#!/usr/bin/env bash' "$(head -1 "$TDX_FAKES_DIR/$t")" "$t shebang"
     done
 }
@@ -79,9 +79,9 @@ test_missing_logon() {
 test_script_logged_with_password() {
     fk_setup
     fk_bteq "query=count db=TDX_DB table=BIG"
-    assert_eq 1 "$(tdx_fake_calls)" "one call logged"
+    assert_eq 1 "$(tt_fake_calls)" "one call logged"
     assert_match "$(grep '^@call ' "$TDX_FAKE_LOG_FILE")" '^@call tool=bteq '
-    assert_eq 1 "$(tdx_fake_scripts "$TDX_TMP/scripts")"
+    assert_eq 1 "$(tt_fake_scripts "$TDX_TMP/scripts")"
     assert_contains "$(cat "$TDX_TMP/scripts/001.bteq")" "$TD_PASS_TEST"
     assert_files_equal "$TDX_TMP/bteq.script" "$TDX_TMP/scripts/001.bteq" "logged script = stdin"
 }
@@ -136,7 +136,7 @@ test_minmax_column_from_sql() {
 
 test_field_escaping() {
     fk_setup
-    tdx_fixture_set TDX_DB.BIG column 1 'A|B\C'$'\n''D' CV 5 '\N' '\N' Y 1
+    tt_fixture_set TDX_DB.BIG column 1 'A|B\C'$'\n''D' CV 5 '\N' '\N' Y 1
     fk_bteq "query=columns db=TDX_DB table=BIG"
     assert_rc 0 "$FK_RC" "$FK_OUT"
     assert_eq '1|A\|B\\C\%0AD|CV|5|\N|\N|Y|1' "$(fk_parse bteq "$TDX_TMP/out0.raw")"
@@ -159,7 +159,7 @@ test_fexp_export_text_layout() {
     fk_setup
     fk_fexp "query=export db=TDX_DB table=MIXED"
     assert_rc 0 "$FK_RC" "$FK_OUT"
-    assert_eq "$(tdx_fixture_lines TDX_DB.MIXED)" "$(fk_parse fexp "$TDX_TMP/fexp.raw")"
+    assert_eq "$(tt_fixture_lines TDX_DB.MIXED)" "$(fk_parse fexp "$TDX_TMP/fexp.raw")"
     assert_contains "$FK_OUT" "**** 12:00:00 UTY8722 4 total records written to output file."
 }
 
@@ -171,7 +171,7 @@ test_bteq_export_and_no_rows() {
     assert_eq "$(for i in 1 5 9 13 17 21 25; do printf '%d|value %02d\n' "$i" "$i"; done)" \
         "$(fk_parse bteq "$TDX_TMP/out0.raw")"
     assert_file "$TDX_TMP/out1.raw"
-    [ -s "$TDX_TMP/out1.raw" ] && tdx_fail "out1.raw must be empty"
+    [ -s "$TDX_TMP/out1.raw" ] && tt_fail "out1.raw must be empty"
     assert_contains "$FK_OUT" "*** Query completed. 7 rows found. 1 column returned."
     assert_contains "$FK_OUT" "*** Query completed. No rows found."
 }
@@ -197,7 +197,7 @@ test_cdc_window() {
 
 test_failure_times_across_processes() {
     fk_setup
-    tdx_fixture_add_failure table=tdx_db.big tool=fexp query=export times=2 code=2633 \
+    tt_fixture_add_failure table=tdx_db.big tool=fexp query=export times=2 code=2633 \
         "message=Too many load/unload tasks running now"
     local out=$TDX_TMP/f.raw k
     for k in 1 2; do
@@ -217,7 +217,7 @@ test_failure_times_across_processes() {
 
 test_failure_chunk_and_bteq_exit_code() {
     fk_setup
-    tdx_fixture_add_failure table=TDX_DB.BIG query=export chunk=2 times=1 code=3707 "message=Syntax error"
+    tt_fixture_add_failure table=TDX_DB.BIG query=export chunk=2 times=1 code=3707 "message=Syntax error"
     fk_bteq "query=export db=TDX_DB table=BIG chunk=1/3"
     assert_rc 0 "$FK_RC" "$FK_OUT"
     fk_bteq "query=export db=TDX_DB table=BIG chunk=2/3"
@@ -229,7 +229,7 @@ test_failure_chunk_and_bteq_exit_code() {
 
 test_metadata_queries_unaffected_by_export_failure() {
     fk_setup
-    tdx_fixture_add_failure table=TDX_DB.BIG times=-1 code=2633 "message=Too many load/unload tasks running now"
+    tt_fixture_add_failure table=TDX_DB.BIG times=-1 code=2633 "message=Too many load/unload tasks running now"
     fk_bteq "query=count db=TDX_DB table=BIG"
     assert_rc 0 "$FK_RC" "$FK_OUT"
     local k

@@ -3,11 +3,15 @@
 
 ut_need_fn() {   # source every lib/*.sh, skip unless function $1 exists
     local f
-    for f in "$TDX_REPO_ROOT"/lib/*.sh; do [ -f "$f" ] && source "$f" >/dev/null 2>&1; done
-    declare -F "$1" >/dev/null || tdx_skip "$1 not defined by lib/*.sh (bash engine not present yet)"
+    read -r -a TDX_AWK_CMD <<<"${TDX_AWK:-awk}"
+    TDX_LIB=$TDX_REPO_ROOT/lib
+    for f in common config types plan extract; do
+        [ -f "$TDX_LIB/$f.sh" ] && source "$TDX_LIB/$f.sh" >/dev/null 2>&1
+    done
+    declare -F "$1" >/dev/null || tt_skip "$1 not defined by lib/*.sh (bash engine not present yet)"
 }
-ut_need_file() { [ -f "$TDX_REPO_ROOT/$1" ] || tdx_skip "$1 not present yet"; }
-ut_mask() { printf '%s' "$1" | tdx_awk -v pw="$2" -f "$TDX_REPO_ROOT/lib/mask.awk"; }
+ut_need_file() { [ -f "$TDX_REPO_ROOT/$1" ] || tt_skip "$1 not present yet"; }
+ut_mask() { printf '%s\n' "$1" | TDX_MASK_PW=$2 tt_awk -f "$TDX_REPO_ROOT/lib/maskfn.awk" -f "$TDX_REPO_ROOT/lib/mask.awk"; }
 
 # ----- rawdecode.awk ------------------------------------------------------------------------------
 ut_le16() { printf "\\$(printf '%03o' $(($1 % 256)))\\$(printf '%03o' $(($1 / 256)))"; }
@@ -19,7 +23,7 @@ ut_rec() {   # ut_rec fexp|bteq|reclen|bare PAYLOAD -> one raw record on stdout
     case $1 in fexp|bteq) printf '\n' ;; esac
 }
 ut_decode() {   # ut_decode RAW REC_PREFIX EOR [WANT] [LIMIT] [UTF8] -> status line; records in $RAW.dat
-    od -An -v -tu1 "$1" | tdx_awk -v rec_prefix="$2" -v eor="$3" -v want="${4:-1}" -v limit="${5:-64000}" \
+    od -An -v -tu1 "$1" | tt_awk -v rec_prefix="$2" -v eor="$3" -v want="${4:-1}" -v limit="${5:-64000}" \
         -v utf8="${6:-0}" -v delim=124 -v esc=92 -v out="$1.dat" -f "$TDX_REPO_ROOT/lib/rawdecode.awk"
 }
 
@@ -38,10 +42,10 @@ test_stream_raw_export_layouts() {
     done
     # a file in another layout must not decode (MISMATCH or ERROR)
     for r in 'abc' 'de'; do ut_rec bteq "$r"; done >"$raw"
-    case $(ut_decode "$raw" 0 1) in OK*) tdx_fail "bteq data, fexp layout must not decode";; esac
+    case $(ut_decode "$raw" 0 1) in OK*) tt_fail "bteq data, fexp layout must not decode";; esac
     for r in 'abc' 'de'; do ut_rec fexp "$r"; done >"$raw"
-    case $(ut_decode "$raw" 1 1) in OK*) tdx_fail "fexp data, bteq layout must not decode";; esac
-    case $(ut_decode "$raw" 0 0) in OK*) tdx_fail "fexp data, bare layout must not decode";; esac
+    case $(ut_decode "$raw" 1 1) in OK*) tt_fail "fexp data, bteq layout must not decode";; esac
+    case $(ut_decode "$raw" 0 0) in OK*) tt_fail "fexp data, bare layout must not decode";; esac
 }
 
 test_stream_raw_export_rejects_garbage() {
@@ -57,14 +61,14 @@ test_rawdecode_nul_byte() {
     ut_need_file lib/rawdecode.awk
     local raw=$TDX_TEST_TMP/x.raw
     { ut_rec fexp ok; ut_le16 3; printf 'a\000b\n'; } >"$raw"
-    assert_eq "ERROR record 2 contains a NUL byte" "$(ut_decode "$raw" 0 1)"
+    assert_eq "ERROR nul 2" "$(ut_decode "$raw" 0 1)"
 }
 
 test_rawdecode_field_count() {
     ut_need_file lib/rawdecode.awk
     local raw=$TDX_TEST_TMP/x.raw
     { ut_rec fexp 'a|b|c'; ut_rec fexp 'a\|b|c'; } >"$raw"
-    assert_eq "ERROR record 2 has 2 fields, expected 3" "$(ut_decode "$raw" 0 1 3)"
+    assert_eq "ERROR fields 2 2" "$(ut_decode "$raw" 0 1 3)"
     ut_rec fexp 'a\\|b|c' >"$raw"
     assert_eq "OK 1" "$(ut_decode "$raw" 0 1 3)" "escaped backslash does not escape the delimiter"
 }
@@ -73,10 +77,10 @@ test_rawdecode_record_limit() {
     ut_need_file lib/rawdecode.awk
     local raw=$TDX_TEST_TMP/x.raw
     { ut_rec bteq abc; ut_rec bteq abcd; } >"$raw"
-    assert_eq "ERROR record 2 exceeds the record limit 3" "$(ut_decode "$raw" 1 1 1 3)"
+    assert_eq "ERROR limit 2" "$(ut_decode "$raw" 1 1 1 3)"
     ut_rec bteq $'\303\251\303\251\303\251' >"$raw"
     assert_eq "OK 1" "$(ut_decode "$raw" 1 1 1 3 1)" "utf8=1 counts characters"
-    assert_eq "ERROR record 1 exceeds the record limit 3" "$(ut_decode "$raw" 1 1 1 3 0)" "utf8=0 counts bytes"
+    assert_eq "ERROR limit 1" "$(ut_decode "$raw" 1 1 1 3 0)" "utf8=0 counts bytes"
 }
 
 # ----- lib/*.sh functions and mask.awk (skipped until the bash engine exists) -------------------
@@ -88,28 +92,28 @@ test_field_count_custom_escape() {
 
 test_check_where() {
     ut_need_fn tdx_check_where
-    tdx_check_where "STATUS <> 'X;--/*' AND ID > 5" || tdx_fail "string literal content must be accepted"
-    tdx_check_where "NAME = 'O''Brien'" || tdx_fail "doubled quote must be accepted"
+    tdx_check_where "STATUS <> 'X;--/*' AND ID > 5" || tt_fail "string literal content must be accepted"
+    tdx_check_where "NAME = 'O''Brien'" || tt_fail "doubled quote must be accepted"
     local bad
     for bad in "1=1; DELETE FROM T" "1=1 -- x" "1=1 /* x */" "NAME = 'open"; do
-        tdx_check_where "$bad" && tdx_fail "must reject: $bad"
+        tdx_check_where "$bad" && tt_fail "must reject: $bad"
     done
     return 0
 }
 
 test_mask_text_variants_and_logon() {
-    ut_need_file lib/mask.awk
+    ut_need_file lib/mask.awk; ut_need_file lib/maskfn.awk
     local out
     out=$(ut_mask $'.LOGON host/user,Secr3t\nerr SECR3T and secr3t' Secr3t)
-    assert_not_contains "$(tdx_lower "$out")" ecr3t
+    assert_not_contains "$(tt_lower "$out")" ecr3t
     assert_contains "$out" ".LOGON host/user,"
     out=$(ut_mask ".logon h/u,other-pw-form" Secr3t)
-    assert_contains "$(tdx_lower "$out")" ".logon h/u,"
+    assert_contains "$(tt_lower "$out")" ".logon h/u,"
     assert_not_contains "$out" other-pw-form
 }
 
 test_mask_text_fragments() {
-    ut_need_file lib/mask.awk
+    ut_need_file lib/mask.awk; ut_need_file lib/maskfn.awk
     local out
     out=$(ut_mask "bad logon: 'LongSecret' ... 'Secret9'" LongSecret99)
     assert_not_contains "$out" LongSecret
@@ -130,51 +134,55 @@ test_tool_log_modes() {
 
 test_cdc_window_pred_initial_includes_nulls() {
     ut_need_fn tdx_cdc_window_pred
-    assert_contains "$(tdx_cdc_window_pred I UPD "" 10)" '"UPD" IS NULL'
-    assert_not_contains "$(tdx_cdc_window_pred I UPD 5 10)" "IS NULL"
-    assert_eq "" "$(tdx_cdc_window_pred I UPD "" "")"
+    tdx_cdc_window_pred I UPD "" 10 || tt_fail "rc $?"
+    assert_contains "$REPLY" '"UPD" IS NULL'
+    tdx_cdc_window_pred I UPD 5 10 || tt_fail "rc $?"
+    assert_not_contains "$REPLY" "IS NULL"
+    assert_contains "$REPLY" '"UPD" > 5'
+    tdx_cdc_window_pred I UPD "" "" || tt_fail "rc $?"
+    assert_eq "" "$REPLY"
 }
 
 # ----- black-box replacements of former white-box tests -----------------------------------------
 ut_export_sql() {   # all export requests' scripts of the last runs, concatenated
     local d=$TDX_TMP/scripts.$RANDOM
-    tdx_fake_scripts "$d" >/dev/null
+    tt_fake_scripts "$d" >/dev/null
     cat "$d"/* 2>/dev/null | grep -F '/* TDX query=export'
 }
 
 test_record_cast_stays_within_varchar_max() {
-    tdx_env_new
-    tdx_set_tables "mixed TDX_DB MIXED"
-    tdx_run_ok
+    tt_env_new
+    tt_set_tables "mixed TDX_DB MIXED"
+    tt_run_ok
     assert_contains "$(ut_export_sql)" "AS VARCHAR(64000))" "latin columns: 64000 (63999 + 1 headroom)"
-    tdx_env_new types.fixture
-    tdx_set_tables "types TDX_DB TYPES"
-    tdx_config_set teradata session_charset UTF8
-    tdx_run_ok
+    tt_env_new types.fixture
+    tt_set_tables "types TDX_DB TYPES"
+    tt_config_set teradata session_charset UTF8
+    tt_run_ok
     assert_contains "$(ut_export_sql)" "AS VARCHAR(32000))" "unicode columns: 32000"
-    tdx_env_new types.fixture
-    tdx_set_tables "types TDX_DB TYPES"
-    tdx_config_set teradata session_charset UTF8
-    tdx_config_set extract max_row_length 100
-    tdx_fixture_set TDX_DB.TYPES row_max 50
-    tdx_run
+    tt_env_new types.fixture
+    tt_set_tables "types TDX_DB TYPES"
+    tt_config_set teradata session_charset UTF8
+    tt_config_set extract max_row_length 100
+    tt_fixture_set TDX_DB.TYPES row_max 50
+    tt_run
     assert_contains "$(ut_export_sql)" "AS VARCHAR(101))" "max_row_length 100 -> 101"
 }
 
 test_wrap_fields_keeps_identifier_spaces() {
-    tdx_env_new
-    tdx_set_tables "mixed TDX_DB MIXED"
-    tdx_run_ok
+    tt_env_new
+    tt_set_tables "mixed TDX_DB MIXED"
+    tt_run_ok
     local d=$TDX_TMP/scripts sql
-    tdx_fake_scripts "$d" >/dev/null
+    tt_fake_scripts "$d" >/dev/null
     sql=$(cat "$d"/* | grep -F '/* TDX query=columns')
     assert_contains "$sql" "TRIM(CAST(ColumnId"
     assert_not_contains "$sql" "TRIM(CAST(ColumnName"
 }
 
 test_new_cycle_id_never_reuses_archive_name() {
-    tdx_env_new
-    tdx_set_tables "mixed TDX_DB MIXED"
+    tt_env_new
+    tt_set_tables "mixed TDX_DB MIXED"
     mkdir -p "$TDX_ROOT/data"
     local now k ts cycle
     now=$(date -u +%s)
@@ -182,39 +190,39 @@ test_new_cycle_id_never_reuses_archive_name() {
         TZ=UTC printf -v ts '%(%Y%m%dT%H%M%SZ)T' $((now + k))
         for ext in tar.gz zip; do : >"$TDX_ROOT/data/x_$ts.$ext"; : >"$TDX_ROOT/data/x_$ts-2.$ext"; done
     done
-    tdx_run_ok
-    cycle=$(tdx_state _run cycle_id)
+    tt_run_ok
+    cycle=$(tt_state _run cycle_id)
     assert_match "$cycle" '^[0-9]{8}T[0-9]{6}Z-[0-9]+$' "taken base id must get a suffix"
-    [ "${cycle##*-}" -ge 3 ] || tdx_fail "suffix -2 is taken too: $cycle"
+    [ "${cycle##*-}" -ge 3 ] || tt_fail "suffix -2 is taken too: $cycle"
     assert_empty "$(find "$TDX_ROOT/data" -name 'x_*' -size +0 | head -1)" "existing archives untouched"
-    tdx_reset_fake_log
-    tdx_run_ok --new-cycle
-    assert_ne "$cycle" "$(tdx_state _run cycle_id)" "a new cycle never reuses the previous id"
+    tt_reset_fake_log
+    tt_run_ok --new-cycle
+    assert_ne "$cycle" "$(tt_state _run cycle_id)" "a new cycle never reuses the previous id"
 }
 
 test_interrupted_cleanup_resumes_from_recorded_zip() {
-    tdx_env_new
-    tdx_run_ok
+    tt_env_new
+    tt_run_ok
     local key=TDX_DB.BIG z sha
-    z=$(tdx_state "$key" zip_file); sha=$(tdx_state "$key" zip_sha256)
+    z=$(tt_state "$key" zip_file); sha=$(tt_state "$key" zip_sha256)
     # simulate a crash after the archive was recorded and raw files deleted, before status=done
-    TDXK=$key tdx_awk '
+    TDXK=$key tt_awk '
         /^\[/ { s = $0; sub(/^\[/, "", s); sub(/\][ \t\r]*$/, "", s) }
         s == ENVIRON["TDXK"] && /^status[ \t]*=/ { print "status = in_progress"; next }
         { print }' "$TDX_STATE" >"$TDX_STATE.new" && mv -f "$TDX_STATE.new" "$TDX_STATE"
-    assert_eq in_progress "$(tdx_state "$key" status)"
-    tdx_reset_fake_log
-    tdx_run_ok --tables "$key"
-    assert_eq done "$(tdx_state "$key" status)"
-    assert_eq "$z $sha" "$(tdx_state "$key" zip_file) $(tdx_state "$key" zip_sha256)"
-    assert_empty "$(tdx_requests export)"
+    assert_eq in_progress "$(tt_state "$key" status)"
+    tt_reset_fake_log
+    tt_run_ok --tables "$key"
+    assert_eq done "$(tt_state "$key" status)"
+    assert_eq "$z $sha" "$(tt_state "$key" zip_file) $(tt_state "$key" zip_sha256)"
+    assert_empty "$(tt_requests export)"
 }
 
 ut_run_failing() {   # ut_run_failing MODE -> UT_LOGS (all *.fexp.log / *.bteq.log)
-    tdx_env_new
-    tdx_config_set extract log_tool_output "$1"
-    tdx_fixture_add_failure table=TDX_DB.BIG query=export chunk=1 times=1 code=3707 "message=Syntax error, expected something"
-    tdx_run
+    tt_env_new
+    tt_config_set extract log_tool_output "$1"
+    tt_fixture_add_failure table=TDX_DB.BIG query=export chunk=1 times=1 code=3707 "message=Syntax error, expected something"
+    tt_run
     assert_rc 1 "$TDX_RC" "$TDX_OUT$TDX_ERR"
     UT_LOGS=$(cat "$TDX_ROOT"/logs/*.fexp.log "$TDX_ROOT"/logs/*.bteq.log 2>/dev/null)
 }
@@ -223,21 +231,21 @@ test_none_keeps_no_tool_output() {
     ut_run_failing none
     assert_contains "$UT_LOGS" "log_tool_output = none"
     assert_not_contains "$UT_LOGS" "Syntax error"
-    assert_not_contains "$(tdx_lower "$UT_LOGS")" records
-    assert_contains "$(tdx_state TDX_DB.BIG last_error)" 3707
-    assert_not_contains "$(tdx_state TDX_DB.BIG last_error)" "Syntax error"
+    assert_not_contains "$(tt_lower "$UT_LOGS")" records
+    assert_contains "$(tt_state TDX_DB.BIG last_error)" 3707
+    assert_not_contains "$(tt_state TDX_DB.BIG last_error)" "Syntax error"
 }
 
 test_errors_keeps_only_error_lines() {
     ut_run_failing errors
     assert_contains "$UT_LOGS" 3707
-    assert_not_contains "$(tdx_lower "$UT_LOGS")" "total records"
+    assert_not_contains "$(tt_lower "$UT_LOGS")" "total records"
 }
 
 test_invalid_mode_is_config_error() {
-    tdx_env_new
-    tdx_config_set extract log_tool_output verbose
-    tdx_run --dry-run
+    tt_env_new
+    tt_config_set extract log_tool_output verbose
+    tt_run --dry-run
     assert_rc 2 "$TDX_RC" "$TDX_OUT$TDX_ERR"
     assert_contains "$TDX_OUT$TDX_ERR" log_tool_output
 }

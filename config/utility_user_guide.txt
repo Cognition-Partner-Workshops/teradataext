@@ -374,7 +374,7 @@ Chunk column / strategy:
 Range boundaries: integer and DATE keys are split with exactly the same formula as in
 earlier versions. For DECIMAL/NUMBER keys with a scale, and integer keys longer than 18
 digits, the boundaries are computed with bc (section 2; without bc the table fails with a
-clear error). Boundaries of keys with a scale are rounded to that scale, so their literals
+clear error). Boundaries of keys with a scale are computed with 10 decimal places beyond that scale, so their literals
 in the chunk predicates (where in the state file, the work/ scripts) may differ textually
 from those of the former engine. Coverage is unchanged: every value, including NULL and
 values outside the MIN..MAX read at planning time, still falls into a chunk.

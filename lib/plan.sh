@@ -173,7 +173,7 @@ tdx_range_predicates() {
             done <<<"$out"
         fi
     else
-        local sc=$((frac > 0 ? frac : 10))
+        local sc=$(((frac > 0 ? frac : 0) + 10))
         [[ $lo =~ ^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)$ && $hi =~ ^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)$ ]] ||
             { TDX_ERR="unexpected numeric value $(tdx_repr "$lo")"; return 1; }
         out=$(printf '%s\n' "scale = $sc; a = ${lo#+}; b = ${hi#+}; n = $n; if (a == b) n = 1" \

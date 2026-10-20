@@ -389,7 +389,7 @@ other byte passes through unchanged. Record length is counted in UTF-8 character
 Range chunks: integer and DATE keys use the former formula exactly (shell 64-bit arithmetic;
 DATE via day numbers). DECIMAL keys with a scale, and integer keys beyond 18 digits, get their
 boundaries from POSIX `bc` (needed only then; without it the table fails with a clear error).
-Boundaries of keys with a scale are rounded to that scale, so their literals may differ
+Boundaries of keys with a scale are computed with 10 decimal places beyond that scale, so their literals may differ
 textually from the Python engine; coverage of every value (NULL and out-of-range included) is
 unchanged.
 

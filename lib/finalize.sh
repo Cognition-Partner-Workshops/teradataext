@@ -32,7 +32,9 @@ tdx_archive() {
     local arch=$1 tmp="$1.tmp" expect got
     shift
     rm -f "$tmp"
-    if ! (cd "$S_output_dir" && tar cf - "$@") | gzip -c >"$tmp"; then
+    (cd "$S_output_dir" && tar cf - "$@") | gzip -c >"$tmp"
+    local -a pst=("${PIPESTATUS[@]}")
+    if ((pst[0] != 0 || pst[1] != 0)); then
         rm -f "$tmp"
         TDX_ERR="cannot create archive ${arch##*/}"
         return 1
@@ -47,6 +49,22 @@ tdx_archive() {
     if [[ $got != "$expect" ]]; then
         rm -f "$tmp"
         TDX_ERR="archive member list mismatch for ${arch##*/}"
+        return 1
+    fi
+    # Content check, one member at a time (bounded extra disk): each must equal its .dat file.
+    local vdir="$TDX_RUNDIR/verify.${BASHPID:-$$}" f ok=1
+    for f; do
+        rm -rf "$vdir"
+        mkdir -p "$vdir" || { ok=0; break; }
+        if ! gzip -dc "$tmp" | (cd "$vdir" && tar xf - "$f") || ! cmp -s "$vdir/$f" "$S_output_dir/$f"; then
+            ok=0
+            break
+        fi
+    done
+    rm -rf "$vdir"
+    if ((ok == 0)); then
+        rm -f "$tmp"
+        TDX_ERR="archive content check failed for ${arch##*/} (member $f)"
         return 1
     fi
     mv -f "$tmp" "$arch" || { TDX_ERR="cannot rename $tmp"; return 1; }

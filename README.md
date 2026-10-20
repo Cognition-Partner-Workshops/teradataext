@@ -253,6 +253,6 @@ compare the outputs byte for byte after the same normalization.
   and the utility never drops data silently.
 - Raw decoding is much slower than in the former engine (see [Performance](#performance)).
 - Range chunks on DECIMAL/NUMBER keys with a scale or integer keys longer than 18 digits
-  need `bc`. Boundaries of keys with a scale are rounded to that scale, so the literals
+  need `bc`. Boundaries of keys with a scale are computed with 10 decimal places beyond that scale, so the literals
   may differ textually from the former engine. Every value (NULL and out-of-range
   included) is still covered.

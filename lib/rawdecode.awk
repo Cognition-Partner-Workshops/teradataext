@@ -1,8 +1,10 @@
-# Decode one raw FastExport/BTEQ export of a single VARCHAR column into .dat records.
-# Input: `od -An -v -tu1 <raw>` (one byte value per field). Run with LC_ALL=C.
-# Vars: rec_prefix, eor (0/1 layout), want (fields per record), limit (max record length),
-#       utf8 (1 = count UTF-8 characters, else bytes), delim, esc (byte values), out (target file).
-# Prints "OK <records>", "MISMATCH" (layout does not fit) or "ERROR <message>" on stdout.
+# Decode one raw FastExport/BTEQ export of a single VARCHAR column into LF-terminated records.
+# Input: `od -An -v -tu1 <raw>` (decimal byte values). Run with LC_ALL=C.
+# Vars: rec_prefix, eor (0/1: the layout tried), want (fields per record, 0 = no check),
+#       limit (max record length, 0 = no check), utf8 (1 = length in UTF-8 characters, else bytes),
+#       delim, esc (byte values), out (target file).
+# Prints one line: "OK <records>", "MISMATCH" (layout does not fit) or
+# "ERROR fields <record> <nfields>" / "ERROR limit <record>" / "ERROR nul <record>".
 BEGIN {
     for (i = 1; i < 256; i++) chr[i] = sprintf("%c", i)
     hlen = rec_prefix ? 4 : 2
@@ -23,7 +25,7 @@ BEGIN {
             if (vrem == 0) { if (eor) st = 2; else { endrec(); st = 0 } } else st = 1
         } else if (st == 1) {
             if (err == "") {
-                if (b == 0) err = "record " (n + 1) " contains a NUL byte"
+                if (b == 0) err = "nul " (n + 1)
                 else {
                     if (escd) escd = 0
                     else if (b == esc) escd = 1
@@ -46,8 +48,8 @@ BEGIN {
 function endrec() {
     n++
     if (err != "") return
-    if (nf != want) err = "record " n " has " nf " fields, expected " want
-    else if (clen > limit) err = "record " n " exceeds the record limit " limit
+    if (want > 0 && nf != want) err = "fields " n " " nf
+    else if (limit > 0 && clen > limit) err = "limit " n
     else printf "\n" > out
 }
 END {

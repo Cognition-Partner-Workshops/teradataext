@@ -1,47 +1,59 @@
 #!/usr/bin/env bash
-# Teradata 16.20 extraction utility entrypoint. See config/utility_user_guide.txt.
-set -euo pipefail
+# Teradata 16.20 extraction utility entrypoint (bash + POSIX awk). See config/utility_user_guide.txt.
+set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ] ||
+    { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -lt 3 ]; }; then
+    echo "ERROR: bash >= 4.3 is required (found ${BASH_VERSION:-unknown})" >&2
+    exit 2
+fi
 
-find_python() {
-    local cand
-    for cand in "${TDX_PYTHON:-}" python3.12 python3; do
-        [ -n "$cand" ] || continue
-        if command -v "$cand" >/dev/null 2>&1 &&
-            "$cand" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
-            command -v "$cand"
-            return 0
-        fi
-    done
-    return 1
-}
+TDX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TDX_LIB="$TDX_ROOT/lib"
 
-PY="$(find_python)" || { echo "ERROR: Python >= 3.12 not found (set TDX_PYTHON)" >&2; exit 2; }
+# TDX_AWK may hold a command with arguments, e.g. "busybox awk".
+if [ -n "${TDX_AWK:-}" ]; then
+    read -r -a TDX_AWK_CMD <<<"$TDX_AWK"
+elif [ "$(uname -s 2>/dev/null)" = SunOS ] && [ -x /usr/xpg4/bin/awk ]; then
+    TDX_AWK_CMD=(/usr/xpg4/bin/awk)
+else
+    TDX_AWK_CMD=(awk)
+fi
+command -v "${TDX_AWK_CMD[0]}" >/dev/null 2>&1 || { echo "ERROR: awk not found: ${TDX_AWK_CMD[0]} (set TDX_AWK)" >&2; exit 2; }
 
-ini_value() {
-    # ini_value <file> <section> <key>: prints the value, empty if absent
-    awk -v sec="[$2]" -v key="$3" '
-        /^[ \t]*[#;]/ { next }
-        /^[ \t]*\[/ { insec = ($0 ~ "^[ \t]*\\[" substr(sec, 2, length(sec) - 2) "\\][ \t]*$"); next }
-        insec { split($0, kv, "="); k = kv[1]; gsub(/^[ \t]+|[ \t]+$/, "", k)
-                if (k == key) { v = substr($0, index($0, "=") + 1); gsub(/^[ \t]+|[ \t]+$/, "", v); print v; exit } }
-    ' "$1"
-}
+for f in common config creds state runner types plan extract finalize main; do
+    # shellcheck disable=SC1090
+    . "$TDX_LIB/$f.sh"
+done
 
-CONFIG="$ROOT/config/main_config.ini"
+CONFIG="$TDX_ROOT/config/main_config.ini"
 NEEDS_TOOLS=1
 prev=""
 for arg in "$@"; do
     case "$arg" in
         --config=*) CONFIG="${arg#--config=}" ;;
         --status) NEEDS_TOOLS=0 ;;
+        -h | --help) NEEDS_TOOLS=0 ;;
     esac
     [ "$prev" = "--config" ] && CONFIG="$arg"
     prev="$arg"
 done
+case " $* " in *" -h "* | *" --help "*) tdx_main "$@" ;; esac
 [ -f "$CONFIG" ] || { echo "ERROR: config file not found: $CONFIG" >&2; exit 2; }
 
+ini_value() {
+    # ini_value <file> <section> <key>: prints the value, empty if absent
+    LC_ALL=C "${TDX_AWK_CMD[@]}" -v sec="$2" -v key="$3" '
+        /^[ \t]*[#;]/ { next }
+        /^[ \t]*\[/ { s = $0; sub(/^[ \t]*\[/, "", s); sub(/\][ \t]*$/, "", s); insec = (s == sec); next }
+        insec { k = $0; sub(/=.*/, "", k); gsub(/^[ \t]+|[ \t]+$/, "", k)
+                if (k == key) { v = substr($0, index($0, "=") + 1); gsub(/^[ \t]+|[ \t]+$/, "", v); print v; exit } }
+    ' "$1"
+}
+
+for tool in od; do
+    command -v "$tool" >/dev/null 2>&1 || { echo "ERROR: required command not found: $tool" >&2; exit 2; }
+done
 if [ "$NEEDS_TOOLS" -eq 1 ]; then
     FEXP="${TDX_FEXP:-$(ini_value "$CONFIG" teradata fexp_path)}"
     BTEQ="${TDX_BTEQ:-$(ini_value "$CONFIG" teradata bteq_path)}"
@@ -51,6 +63,13 @@ if [ "$NEEDS_TOOLS" -eq 1 ]; then
             exit 2
         }
     done
+    for tool in gzip tar mkfifo; do
+        command -v "$tool" >/dev/null 2>&1 || { echo "ERROR: required command not found: $tool" >&2; exit 2; }
+    done
+    tdx_detect_sha256 || {
+        echo "ERROR: no SHA-256 tool found (need sha256sum, shasum, openssl or digest)" >&2
+        exit 2
+    }
 fi
 
 CFG_DIR="$(cd "$(dirname "$CONFIG")" && pwd)"
@@ -65,4 +84,4 @@ for key in output_dir:data metadata_dir:metadata log_dir:logs work_dir:work; do
 done
 
 umask 077
-exec "$PY" "$ROOT/src/extract.py" "$@"
+tdx_main "$@"

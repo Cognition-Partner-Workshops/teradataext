@@ -1,0 +1,650 @@
+==========================================================================================
+                    teradataext - Teradata 16.20 Extraction Utility
+                                 Operator User Guide
+==========================================================================================
+
+Binding interface contract: docs/DESIGN.md. Where this guide and DESIGN.md differ,
+DESIGN.md wins. Items marked [VALIDATE] must be checked on your own Teradata system or
+target (e.g. Redshift) cluster before production use.
+
+CONTENTS
+   1. Purpose
+   2. Prerequisites
+   3. Installation
+   4. Credentials
+   5. Main configuration (config/main_config.ini)
+   6. Source table definitions (config/source_tables.ini)
+   7. Running the utility (CLI options, exit codes)
+   8. Extraction state, resume and restart
+   9. Chunking
+  10. CDC (incremental) extraction
+  11. FastExport vs BTEQ selection
+  12. Session-limit retry
+  13. Output data file format and escaping
+  14. Type mapping
+  15. Metadata file
+  16. Audit log
+  17. Zip, integrity test and raw file deletion
+  18. Executive summary
+  19. Troubleshooting
+  20. Loading into Amazon Redshift
+  21. Files and directories reference
+
+------------------------------------------------------------------------------------------
+1. PURPOSE
+------------------------------------------------------------------------------------------
+
+teradataext extracts tables from a Teradata Database 16.20 system into pipe-delimited text
+files suitable for loading into another database (Amazon Redshift COPY in particular). It:
+
+  * uses FastExport (fexp) for bulk data and BTEQ (bteq) for metadata queries, small
+    tables/chunks, LOB tables and as a fallback when FastExport cannot get sessions;
+  * splits large tables into chunks and runs several jobs in parallel within a session
+    budget;
+  * supports incremental (CDC) extraction based on a watermark column;
+  * records progress after every chunk so an interrupted or failed run can be resumed;
+  * never truncates or silently alters data: a table that cannot be exported losslessly
+    is marked failed;
+  * writes a metadata file per table, an audit log, zips the output and prints an
+    executive summary.
+
+It is a lightweight UNIX utility: one shell entrypoint (teradata_extract.sh) and one
+Python 3.12 module (src/extract.py) using the standard library only.
+
+------------------------------------------------------------------------------------------
+2. PREREQUISITES
+------------------------------------------------------------------------------------------
+
+Host
+  * UNIX/Linux host with network access to the Teradata system (default port 1025).
+  * Python 3.12 (standard library only, no pip packages). The entrypoint uses the
+    interpreter named in TDX_PYTHON, if set.
+  * Teradata Tools and Utilities (TTU) 16.20 with FastExport (fexp) and BTEQ (bteq) on
+    PATH, or configured with absolute paths in fexp_path / bteq_path.
+  * Disk space in output_dir for the raw .dat files plus their zip (the raw files are
+    removed after a successful zip unless keep_raw_after_zip = true).
+
+Teradata user rights (logon user)
+  * SELECT on every source table (or view) to be extracted.
+  * SELECT on DBC.ColumnsV, DBC.IndicesV and DBC.StatsV (column, index and statistics
+    metadata).
+  * CREATE TABLE (and DROP TABLE) rights in logtable_database (or the user's default
+    database when logtable_database is empty) for the FastExport restart log tables
+    tdx_lt_<hash>.
+  * Enough spool space for the largest export query / chunk.
+  * The system must allow FastExport (utility) sessions for this user; the number of
+    concurrent utility jobs is limited by the system (see section 12).
+
+------------------------------------------------------------------------------------------
+3. INSTALLATION
+------------------------------------------------------------------------------------------
+
+  1. Copy the utility directory to the host, e.g. /opt/teradataext. The directory that
+     contains teradata_extract.sh is the "utility root".
+  2. chmod 755 teradata_extract.sh
+  3. Check the tools:      fexp -h ; bteq -h ; python3.12 --version
+     (if python3.12 is not the default interpreter: export TDX_PYTHON=/path/to/python3.12)
+  4. Edit config/main_config.ini (at least [teradata] host) and config/source_tables.ini.
+  5. Delete the sample config/process_state.ini shipped with the utility. The real file is
+     created on the first run; leaving the sample in place would make its example tables
+     look already extracted.
+  6. Provide credentials (section 4).
+  7. Validate without connecting:   ./teradata_extract.sh --dry-run
+
+The directories data/, metadata/, logs/ and work/ are created as needed.
+
+------------------------------------------------------------------------------------------
+4. CREDENTIALS
+------------------------------------------------------------------------------------------
+
+Credentials are resolved in this order:
+
+  1. Environment variables TD_USER and TD_PASS, both set: used (PREFERRED).
+       export TD_USER=etl_user
+       read -s TD_PASS ; export TD_PASS
+  2. Otherwise, [teradata] credentials_file, when set. The file must exist, be owned
+     by the user running the utility and have no group/other permission bits
+     (0600 or 0400).
+     Format (see config/credentials.ini.example):
+       [credentials]
+       user = etl_user
+       password = ...
+     Keep the file OUTSIDE the utility directory / repository and chmod 600 it.
+  3. Otherwise the utility exits with code 2 and a clear message. Setting only one of
+     TD_USER / TD_PASS is also an error (exit 2).
+
+The password is never written to disk. Generated fexp/bteq scripts are piped to the tool
+on stdin with the real .LOGON line; the copies saved under work/ and every captured tool
+output (logs/) have the password replaced by ********.
+
+------------------------------------------------------------------------------------------
+5. MAIN CONFIGURATION (config/main_config.ini)
+------------------------------------------------------------------------------------------
+
+The file is read with Python configparser with interpolation disabled. Comments must be on
+their own line, starting with # or ;. Inline comments are NOT supported: in
+"parallel = 4 ; comment" the value would be "4 ; comment". A different file can be used
+with --config PATH.
+
+[teradata]
+  host               TDPID (host name or alias) used in .LOGON.
+  port               Gateway port (default 1025); used only for the TCP pre-check.
+  logmech            Optional logon mechanism (e.g. TD2, LDAP), emitted as .LOGMECH.
+  credentials_file   Optional credentials file path (section 4). Empty = env vars only.
+  fexp_path          FastExport executable (default fexp). Env TDX_FEXP overrides it.
+  bteq_path          BTEQ executable (default bteq). Env TDX_BTEQ overrides it.
+  session_charset    ASCII or UTF8. Character columns that are not LATIN (e.g. UNICODE)
+                     make the table fail under ASCII; use UTF8 for them. Files are
+                     written in the session character set.
+  logtable_database  Database for the FastExport .LOGTABLE. Empty = the user's default
+                     database. Needs CREATE TABLE rights.
+  connect_check      true/false. TCP connect to host:port before starting; failure ends
+                     the run with exit 2 before anything is extracted.
+
+[paths]
+  base_dir           Base for all relative paths. Empty = parent of the directory holding
+                     main_config.ini (the utility root for config/main_config.ini).
+  output_dir         .dat and .zip files (default data).
+  metadata_dir       .meta.ini files and audit.log (default metadata).
+  log_dir            Run log and per-job tool output (default logs).
+  work_dir           Generated scripts (password masked) and the lock file (default work).
+  source_tables_file Table definitions (default config/source_tables.ini).
+  process_state_file Machine-managed state (default config/process_state.ini).
+
+[extract]
+  file_format             pipe-delimited (the only supported value).
+  parallel                Concurrent export jobs (tables or chunks). <= 0 or "auto" means
+                          min(number of CPUs, max_sessions). Overridden by --parallel.
+  max_sessions            Total Teradata session budget shared by all concurrent jobs.
+  min_sessions            Minimum sessions per job; floor for halving on session limits.
+  chunk_threshold_rows    Tables estimated above this row count are chunked.
+  chunk_rows              Target rows per chunk.
+  max_chunks              Maximum chunks per table.
+  small_table_rows        Jobs (tables/chunks) estimated below this use BTEQ EXPORT.
+  row_estimate            stats = DBC.StatsV statistics, falling back to COUNT(*) when no
+                          statistics exist; count = always COUNT(*). Stale statistics only
+                          affect chunk planning and tool choice, never the data exported.
+  char_trim               CHAR columns only: right (trailing blanks), both, none.
+  lob_max_length          Max characters (CLOB/JSON/XML) or bytes (BLOB) per LOB value.
+                          A longer value makes the table fail (no truncation).
+  max_row_length          Max exported record length in characters; longer = table fails.
+  zip_on_complete         true = zip a table's files when it is done (section 17).
+  keep_raw_after_zip      false = delete the .dat files after a successful zip test.
+  retry_attempts          Session-limit retries per job (section 12).
+  retry_delay_seconds     Wait before each session-limit retry.
+  session_limit_errors    Comma-separated error codes treated as session-limit failures.
+  session_limit_patterns  Comma-separated text patterns (case-insensitive), same purpose.
+  bteq_fallback           true = after FastExport session-limit retries are exhausted try
+                          the job once with BTEQ EXPORT.
+  job_timeout_seconds     Kill a fexp/bteq job running longer than this. 0 = no timeout.
+
+[format]
+  delimiter               Field delimiter (default |).
+  null_sentinel           Written for NULL (default \N).
+  empty_sentinel          Written for zero-length strings/binaries (default \E).
+  escape_char             Escape character (default \).
+  big_decimal_quote       Quote around decimals with precision > big_decimal_threshold
+                          (default ").
+  big_decimal_threshold   Default 18.
+
+  The defaults match docs/DESIGN.md. Changing them changes the file format; loaders must
+  be configured to match (see section 20 for the Redshift recommendations).
+
+------------------------------------------------------------------------------------------
+6. SOURCE TABLE DEFINITIONS (config/source_tables.ini)
+------------------------------------------------------------------------------------------
+
+One section per table; the section name is a free label:
+
+  [orders]
+  database = SALES
+  table = ORDERS
+  cdc_column = UPDATED_TS
+  chunk_column = ORDER_ID
+  where = ORDER_STATUS <> 'X'
+  enabled = true
+
+  database, table   Required. Source database and table/view.
+  cdc_column        Optional. Enables incremental extraction (section 10).
+  chunk_column      Optional. Overrides the automatically chosen chunk column (section 9).
+  where             Optional. Static SQL filter ANDed into every export of the table
+                    (every chunk). Write it as plain Teradata SQL on one line.
+  enabled           Optional, default true. false = the table is ignored.
+
+The table key used in process_state.ini, in metadata/audit and on the command line is
+DATABASE.TABLE upper-cased (SALES.ORDERS); --tables matches it case-insensitively. File
+names use <db>_<table> lower-cased with characters outside [A-Za-z0-9_] replaced by _
+(sales_orders).
+
+------------------------------------------------------------------------------------------
+7. RUNNING THE UTILITY
+------------------------------------------------------------------------------------------
+
+  ./teradata_extract.sh [options]
+
+  --config PATH              Main config file (default <root>/config/main_config.ini).
+  --tables db.t[,db.t...]    Restrict this run to these tables (case-insensitive).
+  --parallel N               Override [extract] parallel for this run.
+  --new-cycle                Start a new extraction cycle: every table back to pending,
+                             chunk lists cleared, CDC watermarks KEPT.
+  --reset-table db.t         Reset one table to pending (chunks cleared, watermark kept).
+                             Repeatable.
+  --reset-watermark db.t     Additionally clear the table's CDC watermark (its next run is
+                             a full extract). Repeatable.
+  --dry-run                  Validate config, credentials and tools, print the work queue;
+                             does not connect to Teradata.
+  --status                   Print the state summary and exit; does not connect.
+  -v, --verbose              DEBUG logging on the console.
+
+Environment variables
+  TD_USER, TD_PASS   Credentials (section 4).
+  TDX_PYTHON         Python interpreter used by teradata_extract.sh.
+  TDX_FEXP, TDX_BTEQ Override fexp_path / bteq_path (the tests use them for fake tools).
+
+Exit codes
+  0    all queued tables done
+  1    at least one table failed (others may be done; rerun to resume)
+  2    configuration, credential, tool or lock error - nothing extracted
+  130  interrupted (Ctrl-C / SIGINT); state saved, resumable
+
+Only one instance can run against a state file at a time (flock on
+work/.process_state.lock). A second instance ends with exit 2.
+
+Examples
+  ./teradata_extract.sh --dry-run
+  ./teradata_extract.sh
+  ./teradata_extract.sh --tables sales.orders,sales.customer --parallel auto
+  ./teradata_extract.sh --status
+  ./teradata_extract.sh --new-cycle
+  ./teradata_extract.sh --reset-table SALES.ORDERS --tables SALES.ORDERS
+
+------------------------------------------------------------------------------------------
+8. EXTRACTION STATE, RESUME AND RESTART
+------------------------------------------------------------------------------------------
+
+config/process_state.ini is MACHINE-MANAGED. Do not edit it; use the CLI options. It is
+rewritten atomically (temporary file, fsync, rename) after every chunk and table status
+change, so it is consistent even after a crash or kill.
+
+It holds a [_run] section (cycle_id, last_run_id, last run start/finish), one section per
+table (DATABASE.TABLE: status, attempts, method, row estimate, chunk plan, chunks_done,
+rows, files, checksum, zip, watermark/pending_watermark, timings, last_error) and one
+section per chunk (DATABASE.TABLE/partNNN: status, rows, file, bytes, sha256, method,
+sessions, chunk predicate). Status values: pending, in_progress, done, failed.
+
+Resume behaviour (simply rerun the same command):
+  * The work queue is the enabled tables (optionally filtered by --tables) whose status is
+    not done. Tables already done in the current cycle are skipped.
+  * Within a chunked table, chunks already done are skipped; only the remaining chunks
+    are exported.
+  * Anything found in_progress at startup (the previous run died) is treated as pending
+    and redone. Failed tables/chunks are retried on the next run.
+  * Exit code 130 (interrupted) and exit code 1 (some table failed) are both resumable.
+
+Restart behaviour:
+  * --new-cycle starts a new cycle (new cycle_id): every table back to pending, chunk
+    lists cleared. CDC watermarks are kept, so CDC tables export only rows changed since
+    the last committed watermark; non-CDC tables are exported in full again.
+  * --reset-table DB.T re-extracts one table from scratch in the current cycle (chunks
+    cleared, watermark kept).
+  * --reset-watermark DB.T also clears the CDC watermark, so the next export of that table
+    is a full extract.
+
+------------------------------------------------------------------------------------------
+9. CHUNKING
+------------------------------------------------------------------------------------------
+
+A table whose estimated row count exceeds chunk_threshold_rows is split into chunks of
+about chunk_rows rows, at most max_chunks chunks (the exact chunk-count calculation is an
+engine detail). Each chunk is an independent job with its own file
+<db>_<table>.partNNN.dat (NNN = 1-based chunk number, 3 digits) and its own state.
+
+Chunk column / strategy:
+  * chunk_column from source_tables.ini, when set; otherwise
+  * a single-column primary key or primary index column of a numeric or DATE type:
+    RANGE chunking. MIN/MAX of the column are read and split into contiguous ranges.
+    Rows where the column is NULL are included in chunk 1, so no row is lost.
+    (chunk_strategy = range)
+  * otherwise HASH chunking on the primary index:
+      HASHBUCKET(HASHROW(<primary index columns>)) MOD <n> = <chunk - 1>
+    (chunk_strategy = hash). Hash chunks are roughly equal when the PI is well
+    distributed; a skewed PI gives skewed chunks.
+  * unchunked tables have chunk_strategy = none and no .partNNN suffix.
+
+Range chunks on skewed data can be uneven. For tables with a poor PI, set chunk_column to
+a well-distributed numeric/date column. The static where filter is ANDed into every chunk.
+
+------------------------------------------------------------------------------------------
+10. CDC (INCREMENTAL) EXTRACTION
+------------------------------------------------------------------------------------------
+
+For a table with cdc_column:
+
+  1. Before exporting, the upper bound is captured first: MAX(cdc_column) of rows above
+     the last committed watermark. It is stored as pending_watermark.
+  2. The export selects  cdc_column > watermark  AND  cdc_column <= pending_watermark
+     (only the upper bound when there is no watermark yet: first run = full extract).
+     Rows committed in Teradata while the export runs and later than the upper bound are
+     picked up by the next cycle, not lost.
+  3. The watermark is committed (watermark = pending_watermark) ONLY after the whole table
+     (all chunks) completed successfully. A failed or interrupted run keeps the old
+     watermark, so the next attempt re-exports the same window.
+  4. When there are no new rows, the table completes with 0 rows and the watermark is
+     unchanged.
+
+Watermark text format: integers plain, DATE YYYY-MM-DD, TIMESTAMP
+YYYY-MM-DD HH:MI:SS.ffffff. The audit log records watermark=<from>-><to>.
+
+Notes:
+  * Each cycle produces files with only the changed rows; the target load must merge
+    (upsert) them. Deletes in the source are not captured.
+  * The cdc_column must be maintained on insert and update. Rows updated with a value at
+    or below the watermark (e.g. back-dated timestamps) are missed.
+  * Use --new-cycle for each new incremental cycle; --reset-watermark for a full reload.
+
+------------------------------------------------------------------------------------------
+11. FASTEXPORT VS BTEQ SELECTION
+------------------------------------------------------------------------------------------
+
+  * BTEQ is always used for metadata queries (columns, indexes, statistics, counts,
+    min/max, LOB and row-length checks, CDC upper bound).
+  * Data exports use FastExport (multi-session) except:
+      - jobs (whole tables or chunks) estimated below small_table_rows: BTEQ EXPORT
+        (FastExport start-up overhead and utility slots are not worth it);
+      - tables with LOB columns (CLOB, BLOB, JSON, XML): always BTEQ EXPORT;
+      - FastExport jobs that still hit a session limit after all retries, when
+        bteq_fallback = true: one final attempt with BTEQ EXPORT.
+  * method in the state file records fexp, bteq, or mixed (chunks used different tools).
+
+------------------------------------------------------------------------------------------
+12. SESSION-LIMIT RETRY
+------------------------------------------------------------------------------------------
+
+Teradata limits concurrent utility (FastExport/load) jobs and sessions. A job failure is a
+session-limit failure when the tool output contains "Failure <code>" or "Error <code>"
+with a code in session_limit_errors (default 2633, 3130), or any of
+session_limit_patterns (case-insensitive).
+
+  * A session-limit failure is retried after retry_delay_seconds with
+    sessions = max(min_sessions, sessions // 2), up to retry_attempts times.
+  * Then, for FastExport jobs with bteq_fallback = true, once via BTEQ EXPORT.
+  * Any other failure is not retried within the run: the chunk/table is marked failed
+    and is retried on the next run.
+
+[VALIDATE] The codes and message texts vary with the database release and the site's
+workload management (TASM/TDWM) rules. Check session_limit_errors and
+session_limit_patterns against your system's message catalog and real fexp/bteq output.
+
+------------------------------------------------------------------------------------------
+13. OUTPUT DATA FILE FORMAT AND ESCAPING
+------------------------------------------------------------------------------------------
+
+  * File: data/<db>_<table>[.partNNN].dat; no header line.
+  * Encoding: ASCII (session_charset = ASCII) or UTF-8 (UTF8).
+  * One record per row, fields separated by |, records terminated by LF.
+  * NULL is written as \N. A zero-length string or binary value is written as \E.
+  * Inside text values, \ | CR and LF are escaped with a preceding \ :
+       a\b -> a\\b      a|b -> a\|b      line break -> \ followed by the LF
+    (Redshift COPY ... ESCAPE compatible). A raw LF preceded by an odd number of \ is
+    data, not the end of a record.
+  * Decimals with precision above big_decimal_threshold (18) are quoted: "12345...67.89".
+  * Binary values are hexadecimal text.
+
+Example (ORDER_ID INTEGER | NAME VARCHAR | NOTE VARCHAR | AMOUNT DECIMAL(20,2)):
+  1001|ACME Corp|Rush \| fragile|"123456789012345678.25"
+  1002|\N|\E|"15.00"
+  1003|Smith \\ Sons|\N|\N
+Row 1002: NAME is NULL and NOTE is an empty string. Row 1001: NOTE is "Rush | fragile".
+
+During export the tool writes <final>.raw (binary record layout); it is converted to the
+.dat file and removed. Row counts are taken from the raw file and must match the counts
+reported by fexp/bteq, otherwise the job fails.
+
+------------------------------------------------------------------------------------------
+14. TYPE MAPPING
+------------------------------------------------------------------------------------------
+
+Teradata type (DBC code)       Encoding          Output rule             Redshift type
+------------------------------ ----------------- ----------------------- -----------------
+BYTEINT (I1), SMALLINT (I2)    int_text          plain integer           SMALLINT
+INTEGER (I)                    int_text          plain integer           INTEGER
+BIGINT (I8)                    int_text          plain integer           BIGINT
+DECIMAL/NUMERIC (D) p<=18      decimal_text      plain, '.' point        DECIMAL(p,s)
+DECIMAL p>18, NUMBER (N) p>18  decimal_quoted    "text" (quoted)         DECIMAL(p,s) if
+  or unbounded NUMBER                                                    p<=38, else
+                                                                         VARCHAR
+NUMBER (N) p<=18               decimal_text      plain                   DECIMAL(p,s)
+FLOAT/REAL/DOUBLE (F)          float_text        17 sig. digits, E+nnn   FLOAT8
+DATE (DA)                      iso_date          YYYY-MM-DD              DATE
+TIME (AT)                      iso_time          HH:MI:SS[.f]            TIME
+TIME WITH TIME ZONE (TZ)       utc_iso_time      UTC, HH:MI:SS[.f]Z      TIMETZ
+TIMESTAMP (TS)                 iso_timestamp     YYYY-MM-DDTHH:MI:SS[.f] TIMESTAMP
+TIMESTAMP WITH TIME ZONE (SZ)  utc_iso_timestamp UTC, ...Z               TIMESTAMPTZ
+INTERVAL (YR,YM,MO,DY,DH,DM,   interval_text     CAST to VARCHAR, trim   VARCHAR(n)
+  DS,HR,HM,HS,MI,MS,SC)
+PERIOD (PD,PT,PZ,PS,PM)        period_text       CAST to VARCHAR         VARCHAR(n)
+CHAR (CF)                      escaped_text      char_trim, escaped      CHAR(n); UNICODE:
+                                                                         VARCHAR(n*4)
+VARCHAR (CV)                   escaped_text      escaped                 VARCHAR(n); x4
+                                                                         for UNICODE,
+                                                                         max 65535
+CLOB (CO), JSON (JN), XML (XM) escaped_text      VARCHAR(lob_max_length) VARCHAR(65535)
+                                                 after length check
+BYTE (BF), VARBYTE (BV),       hex               FROM_BYTES(..,'base16') VARBYTE(n)
+  BLOB (BO)                                      BLOB: length check
+anything else (UDT, ARRAY..)   unsupported       table fails             -
+
+Never lossy - the table fails (status failed, last_error set) instead of truncating when:
+a LOB value exceeds lob_max_length, a record exceeds max_row_length, a column type is
+unsupported, or a non-LATIN character column is exported with session_charset = ASCII.
+
+Time zones: TIME/TIMESTAMP WITH TIME ZONE values are converted to UTC and written with a
+trailing Z; the metadata records source_timezone = per-value offset, converted to UTC.
+TIME and TIMESTAMP without time zone are written as stored (no conversion).
+
+------------------------------------------------------------------------------------------
+15. METADATA FILE (metadata/<db>_<table>.meta.ini)
+------------------------------------------------------------------------------------------
+
+Written for every extracted table. [table] section: database, table, extracted_at,
+column_count, row_estimate, row_estimate_source, primary_index, chunk_strategy,
+chunk_column, chunk_count, cdc_column, session_charset, file_format, delimiter,
+null_sentinel, empty_sentinel, escape_char, record_terminator, timezone_policy = UTC.
+
+One [column.NNN] section per column in ordinal order: name, position, source_type
+(e.g. DECIMAL(38,2)), td_type_code, nullable, char_set, output_encoding, redshift_type,
+null_sentinel (\N), empty_sentinel (\E or n/a), empty_string_possible (yes/no),
+source_timezone (time zone types only), notes.
+
+Use redshift_type to generate target DDL, and output_encoding / empty_string_possible to
+decide how each column must be loaded (section 20).
+
+------------------------------------------------------------------------------------------
+16. AUDIT LOG (metadata/audit.log)
+------------------------------------------------------------------------------------------
+
+Append-only; one line per table per run:
+
+  <utc iso ts> | <run_id> | <DB.TABLE> | <done|failed|skipped> | rows=<n> | files=<n> |
+  chunks=<done>/<total> | method=<m> | elapsed=<s>s | watermark=<from>-><to> | <message>
+
+(one physical line; wrapped here). skipped = already done in the current cycle.
+
+------------------------------------------------------------------------------------------
+17. ZIP, INTEGRITY TEST AND RAW FILE DELETION
+------------------------------------------------------------------------------------------
+
+With zip_on_complete = true, when all chunks of a table are done its .dat files are zipped
+into data/<db>_<table>_<cycle_id>.zip. The zip is then integrity-tested (read back and
+CRC-checked); its SHA-256 is recorded as zip_sha256. Only after a successful test, and
+only when keep_raw_after_zip = false, are the raw .dat files deleted. checksum_sha256 in
+the state file is the SHA-256 over the per-chunk SHA-256 hex strings joined by LF, in
+chunk order; each chunk's sha256 is in its [DB.TABLE/partNNN] section.
+
+Verify a zip by hand:   unzip -t data/sales_orders_<cycle_id>.zip
+                        sha256sum data/sales_orders_<cycle_id>.zip
+
+------------------------------------------------------------------------------------------
+18. EXECUTIVE SUMMARY
+------------------------------------------------------------------------------------------
+
+Printed on stdout at exit, e.g.:
+
+  ==================== TERADATA EXTRACT SUMMARY ====================
+  Run id        : 20261020T013200Z-12345
+  Tables        : done=3 failed=1 pending=0 (queued=4, skipped already done=2)
+  Rows exported : 1,234,567
+  Files written : 9 (.dat) / 3 (.zip)
+  Elapsed       : 00:12:34
+  FAILED        : SALES.BIG_LOB - LOB value length 40000 exceeds lob_max_length 32000
+  ==================================================================
+
+Details: logs/extract_<run_id>.log, per-job tool output logs/<db>_<table>[.partNNN].
+<fexp|bteq>.log, generated scripts work/<db>_<table>[.partNNN].<fexp|bteq>.
+
+------------------------------------------------------------------------------------------
+19. TROUBLESHOOTING
+------------------------------------------------------------------------------------------
+
+First look at last_error (--status), the run log and the per-job tool log in logs/.
+Message texts below are typical; [VALIDATE] against your release's message catalog.
+
+Exit code 2 (nothing extracted)
+  * "credentials" - set both TD_USER and TD_PASS, or fix credentials_file
+    (exists, owned by you, chmod 600).
+  * "tool not found" - fexp/bteq not on PATH; set fexp_path/bteq_path or fix PATH.
+  * connect check failed - host/port wrong, DNS, firewall; test: nc -vz <host> 1025.
+  * lock - another instance is running (work/.process_state.lock).
+  * configuration error - message names the file/section/key; remember: no inline
+    comments.
+
+Teradata errors
+  2633  Too many load/unload tasks running now. System utility-job limit reached
+        (session-limit failure: retried with fewer sessions, then BTEQ fallback). Lower
+        parallel/max_sessions or run outside busy load windows.
+  3130  Response limit exceeded (too many open responses/requests for the user). Treated
+        as a session-limit failure by default. Lower parallel.
+  8017  The UserId, Password or Account is invalid. Bad logon: check TD_USER/TD_PASS or
+        the credentials file, logmech (e.g. LDAP), and whether the user is locked.
+  3523, 3524
+        Access-rights errors: the user (or, for a view, the view's owning database)
+        lacks a right on an object or database. Grant SELECT on the source table/view
+        (with GRANT OPTION to the view owner where views are used), SELECT on
+        DBC.ColumnsV/IndicesV/StatsV, and CREATE TABLE on logtable_database. The
+        message names the missing right and object.
+  3807  Object '<name>' does not exist. Wrong database/table in source_tables.ini,
+        missing access to the object, or logtable_database does not exist.
+  2646  No more spool space. Chunk the table more (lower chunk_rows) or ask for spool.
+
+Table marked failed (exit 1)
+  * "LOB value length ... exceeds lob_max_length" - raise lob_max_length (mind
+    max_row_length and the target's 65535 VARCHAR limit) or exclude the table.
+  * "record length ... exceeds max_row_length" - raise max_row_length if the tools and
+    target allow it.
+  * "unsupported type" - UDT/ARRAY/etc.: export through a view that casts the column.
+  * non-LATIN column with ASCII - set session_charset = UTF8.
+  * row count mismatch / raw layout not recognised - check the tool log; report it with
+    the work/ script and tool versions.
+  Fix the cause and rerun: done chunks are skipped.
+
+------------------------------------------------------------------------------------------
+20. LOADING INTO AMAZON REDSHIFT
+------------------------------------------------------------------------------------------
+
+[VALIDATE] Everything in this section must be validated on the target cluster with real
+extracted samples (including NULLs, empty strings, embedded |, \ and line breaks, big
+decimals, time zone and binary columns) before production loads.
+
+Create target tables from the redshift_type values in the .meta.ini files. Upload the
+.dat files (unzipped) to S3, then load with COPY:
+
+  COPY sales.orders
+  FROM 's3://my-bucket/extract/sales_orders.part'
+  IAM_ROLE 'arn:aws:iam::123456789012:role/MyRedshiftRole'
+  DELIMITER '|' ESCAPE NULL AS '\\N'
+  DATEFORMAT 'YYYY-MM-DD' TIMEFORMAT 'auto'
+  ENCODING UTF8;
+
+  (ENCODING UTF8 also reads ASCII files.) In Redshift string literals a backslash is
+  doubled, so '\\N' denotes the two characters \N.
+
+ESCAPE makes COPY turn \| into |, \\ into \ and \<LF> into a line break, which is exactly
+how the utility escapes text. Two default settings are NOT compatible with ESCAPE:
+
+  * Empty strings: with ESCAPE, the sentinel \E is read as an escaped E and loads as the
+    letter "E" - indistinguishable from a real value "E".
+  * Big decimals: values with precision > 18 are written as "123.45" (quoted). Without the
+    CSV option the quotes are data, so loading them into DECIMAL columns fails.
+
+Option A (recommended) - direct load. Extract with these [format] settings:
+
+  empty_sentinel =
+  big_decimal_quote =
+
+An empty string is then an empty field (Redshift loads an empty field into CHAR/VARCHAR
+as an empty string unless EMPTYASNULL/BLANKSASNULL are used; do not use them) and NULL
+remains \N. Big decimals are plain numbers and load into DECIMAL(p,s) directly. Use the
+COPY above unchanged. Values longer than the target column, and DECIMAL values with
+precision > 38 (mapped to VARCHAR), need attention in the DDL.
+
+Option B - keep the default format and load into a VARCHAR staging table, then decode.
+Do NOT load with ESCAPE and then try to repair: e.g. CASE WHEN col = 'E' THEN '' ... is
+WRONG, because after ESCAPE a real "E" and an empty string look the same.
+
+Correct staging approach: load WITHOUT ESCAPE into a staging table whose columns are all
+VARCHAR(65535), so every field arrives exactly as written in the file, then decode:
+
+  CREATE TABLE stage.orders (order_id VARCHAR(65535), name VARCHAR(65535),
+                             note VARCHAR(65535), amount VARCHAR(65535));
+
+  COPY stage.orders
+  FROM 's3://my-bucket/extract/sales_orders.part'
+  IAM_ROLE 'arn:aws:iam::123456789012:role/MyRedshiftRole'
+  DELIMITER '|' NULL AS '\\N' ENCODING UTF8;
+
+  INSERT INTO sales.orders (order_id, name, note, amount)
+  SELECT CAST(order_id AS INTEGER),
+         CASE WHEN name = '\\E' THEN '' ELSE REPLACE(name, '\\\\', '\\') END,
+         CASE WHEN note = '\\E' THEN '' ELSE REPLACE(note, '\\\\', '\\') END,
+         CAST(TRIM(BOTH '"' FROM amount) AS DECIMAL(20,2))
+  FROM stage.orders;
+
+  (In the SQL literals '\\E' is the two characters \E, '\\\\' is \\ and '\\' is \.)
+
+LIMITATION of option B: without ESCAPE, COPY does not understand \| or an escaped line
+break, so a text value containing |, CR or LF splits the record and the load fails or is
+misaligned. Option B is therefore only valid for tables whose text values contain no |,
+CR or LF; otherwise use option A. Check the data (e.g. grep -c '\\|' on the .dat file is a
+quick hint) before choosing B. Hex columns (binary) are loaded to VARCHAR in staging and
+converted to VARBYTE as appropriate (e.g. FROM_HEX) [VALIDATE].
+
+Further target notes [VALIDATE]:
+  * TIMESTAMP values use a 'T' separator (YYYY-MM-DDTHH:MI:SS.f); TIMEFORMAT 'auto'
+    is expected to accept it.
+  * TIMESTAMPTZ/TIMETZ values are UTC with a trailing Z.
+  * FLOAT values use 17 significant digits and E+nnn exponents (FLOAT8).
+  * Binary columns are hexadecimal text for VARBYTE columns.
+  * Columns with empty_string_possible = no in the metadata never contain \E.
+  * For CDC cycles, COPY into a staging table and MERGE into the target.
+  * After loading, compare row counts with rows/rows_exported in the state file and the
+    audit log.
+
+------------------------------------------------------------------------------------------
+21. FILES AND DIRECTORIES REFERENCE
+------------------------------------------------------------------------------------------
+
+  teradata_extract.sh                          entrypoint
+  src/extract.py                               engine (Python 3.12, stdlib only)
+  config/main_config.ini                       main configuration (user-maintained)
+  config/source_tables.ini                     table definitions (user-maintained)
+  config/process_state.ini                     extraction state (MACHINE-MANAGED)
+  config/credentials.ini.example               credentials file template
+  config/utility_user_guide.txt                this guide
+  metadata/<db>_<table>.meta.ini               per-table metadata
+  metadata/audit.log                           audit log
+  data/<db>_<table>[.partNNN].dat              data files (removed after zip by default)
+  data/<db>_<table>_<cycle_id>.zip             zipped data files
+  logs/extract_<run_id>.log                    run log
+  logs/<db>_<table>[.partNNN].<fexp|bteq>.log  per-job tool output (password masked)
+  work/<db>_<table>[.partNNN].<fexp|bteq>      generated scripts (LOGON masked)
+  work/.process_state.lock                     single-instance lock

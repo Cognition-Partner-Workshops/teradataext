@@ -32,9 +32,20 @@ tdx_archive() {
     local arch=$1 tmp="$1.tmp" expect got
     shift
     rm -f "$tmp"
-    (cd "$S_output_dir" && tar cf - "$@") | gzip -c >"$tmp"
+    # The tar stream's SHA-256 is taken while compressing; the archive must decompress to exactly
+    # that stream (one extra pass, nothing staged on disk).
+    local fifo="$TDX_RUNDIR/tarsha.${BASHPID:-$$}.fifo" shaf="$TDX_RUNDIR/tarsha.${BASHPID:-$$}" sp
+    rm -f "$fifo" "$shaf"
+    mkfifo "$fifo" || { TDX_ERR="cannot create $fifo"; return 1; }
+    tdx_sha256 <"$fifo" >"$shaf" &
+    sp=$!
+    (cd "$S_output_dir" && tar cf - "$@") | tee "$fifo" | gzip -c >"$tmp"
     local -a pst=("${PIPESTATUS[@]}")
-    if ((pst[0] != 0 || pst[1] != 0)); then
+    wait "$sp"
+    local tar_sha
+    tar_sha=$(cat "$shaf" 2>/dev/null)
+    rm -f "$fifo" "$shaf"
+    if ((pst[0] != 0 || pst[1] != 0 || pst[2] != 0)) || [[ -z $tar_sha ]]; then
         rm -f "$tmp"
         TDX_ERR="cannot create archive ${arch##*/}"
         return 1
@@ -51,20 +62,9 @@ tdx_archive() {
         TDX_ERR="archive member list mismatch for ${arch##*/}"
         return 1
     fi
-    # Content check, one member at a time (bounded extra disk): each must equal its .dat file.
-    local vdir="$TDX_RUNDIR/verify.${BASHPID:-$$}" f ok=1
-    for f; do
-        rm -rf "$vdir"
-        mkdir -p "$vdir" || { ok=0; break; }
-        if ! gzip -dc "$tmp" | (cd "$vdir" && tar xf - "$f") || ! cmp -s "$vdir/$f" "$S_output_dir/$f"; then
-            ok=0
-            break
-        fi
-    done
-    rm -rf "$vdir"
-    if ((ok == 0)); then
+    if [[ $(gzip -dc "$tmp" | tdx_sha256) != "$tar_sha" ]]; then
         rm -f "$tmp"
-        TDX_ERR="archive content check failed for ${arch##*/} (member $f)"
+        TDX_ERR="archive content check failed for ${arch##*/}"
         return 1
     fi
     mv -f "$tmp" "$arch" || { TDX_ERR="cannot rename $tmp"; return 1; }

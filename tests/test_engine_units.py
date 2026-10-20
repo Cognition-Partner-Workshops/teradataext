@@ -76,6 +76,19 @@ class TestHelpers(unittest.TestCase):
         self.assertNotIn("IS NULL", tdx.cdc_window_pred(col, "5", "10"))
         self.assertEqual(tdx.cdc_window_pred(col, "", ""), "")
 
+    def test_record_cast_stays_within_varchar_max(self):
+        def rule(char_type):
+            col = tdx.Column(position=1, name="C", type_code="CV", length=10, total_digits=0, frac_digits=0,
+                             nullable=True, char_type=char_type)
+            r = tdx.ColumnRule(col, "escaped_text", "VARCHAR(10)", max_len=20)
+            r.expr = "x"
+            return r
+        s = SimpleNamespace(max_row_length=64000, delimiter="|", session_charset="UTF8")
+        self.assertTrue(tdx.record_sql([rule(1)], s).endswith("AS VARCHAR(64000))"))
+        self.assertTrue(tdx.record_sql([rule(2)], s).endswith("AS VARCHAR(32000))"))
+        s.max_row_length = 100
+        self.assertTrue(tdx.record_sql([rule(2)], s).endswith("AS VARCHAR(101))"))
+
     def test_wrap_fields_keeps_identifier_spaces(self):
         sql = tdx.wrap_fields(["ColumnId", "ColumnName"], untrimmed=("ColumnName",))
         self.assertIn("TRIM(CAST(ColumnId", sql)

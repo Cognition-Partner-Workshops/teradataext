@@ -167,6 +167,9 @@ with --config PATH.
   lob_max_length          Max characters (CLOB/JSON/XML) or bytes (BLOB) per LOB value.
                           A longer value makes the table fail (no truncation).
   max_row_length          Max exported record length in characters; longer = table fails.
+                          Capped at 63999 (31999 for tables with UNICODE columns): the
+                          record is cast to VARCHAR(limit + 1), and Teradata allows 64000
+                          LATIN / 32000 UNICODE characters.
   zip_on_complete         true = zip a table's files when it is done (section 17).
   keep_raw_after_zip      false = delete the .dat files after a successful zip test.
   retry_attempts          Session-limit retries per job (section 12).

@@ -514,7 +514,7 @@ def load_settings(config_path: Path, parallel_override: str | None = None) -> Se
         row_estimate=row_estimate,
         char_trim=char_trim,
         lob_max_length=_int(cp, "extract", "lob_max_length", 32000),
-        max_row_length=_int(cp, "extract", "max_row_length", 64000),
+        max_row_length=_int(cp, "extract", "max_row_length", 63999),
         zip_on_complete=_bool(cp, "extract", "zip_on_complete", True),
         keep_raw_after_zip=_bool(cp, "extract", "keep_raw_after_zip", False),
         retry_attempts=max(0, _int(cp, "extract", "retry_attempts", 3)),
@@ -1098,11 +1098,22 @@ def build_rule(col: Column, s: Settings) -> ColumnRule:
     return ColumnRule(col, "unsupported", "", notes=f"Teradata type code {c!r} is not supported")
 
 
+VARCHAR_MAX_LATIN = 64000
+VARCHAR_MAX_UNICODE = 32000
+
+
+def row_limit(rules: list[ColumnRule], s: Settings) -> int:
+    """Effective max record length: max_row_length, capped so the record cast (+1 headroom) is a valid VARCHAR."""
+    unicode = any(r.col.char_type == 2 or (r.col.type_code in {"JN", "XM"} and s.session_charset == "UTF8")
+                  for r in rules)
+    return min(s.max_row_length, (VARCHAR_MAX_UNICODE if unicode else VARCHAR_MAX_LATIN) - 1)
+
+
 def record_sql(rules: list[ColumnRule], s: Settings) -> str:
     joined = f" || {sql_str(s.delimiter)} || ".join(f"({r.expr})" for r in rules)
-    # One character of headroom: a record longer than max_row_length arrives as max_row_length + 1
-    # characters and is rejected, so a cut record can never pass as a record that fits exactly.
-    return f"CAST({joined} AS VARCHAR({s.max_row_length + 1}))"
+    # One character of headroom: a record longer than the limit arrives as limit + 1 characters and is
+    # rejected, so a cut record can never pass as a record that fits exactly.
+    return f"CAST({joined} AS VARCHAR({row_limit(rules, s) + 1}))"
 
 
 def wrap_fields(exprs: list[str], untrimmed: tuple[str, ...] = ()) -> str:
@@ -1536,9 +1547,10 @@ class Extractor:
                 marker("lobcheck", t, cols=",".join(r.col.name for r in lob_rules), **cdc_marks)
                 + " SELECT " + wrap_fields(exprs) + f" FROM {t.fqn}" + where_sql(*base_preds)
             )
+        limit = row_limit(w.rules, s)
         sentinel = max(len(s.null_sentinel), len(s.empty_sentinel))
         theoretical = sum(max(r.max_len, sentinel) for r in w.rules) + len(w.rules) - 1
-        if theoretical > s.max_row_length:
+        if theoretical > limit:
             total = " + ".join(f"CHARACTER_LENGTH({r.expr})" for r in w.rules)
             reqs.append(
                 marker("rowcheck", t, **cdc_marks) + " SELECT "
@@ -1558,12 +1570,13 @@ class Extractor:
                         f"lob_max_length {s.lob_max_length}"
                     )
             pos = 1
-        if theoretical > s.max_row_length:
+        if theoretical > limit:
             row = res[pos][0] if res[pos] else []
             v = row[0] if row else None
-            if v and int(Decimal_or_int(v)) > s.max_row_length:
+            if v and int(Decimal_or_int(v)) > limit:
                 raise ExtractError(
-                    f"record length {int(Decimal_or_int(v))} exceeds max_row_length {s.max_row_length}"
+                    f"record length {int(Decimal_or_int(v))} exceeds the record limit {limit} "
+                    f"(max_row_length, capped at the Teradata VARCHAR maximum)"
                 )
 
     # ----------------------------------------------------------------- export
@@ -1621,6 +1634,7 @@ class Extractor:
         want = len(w.rules)
         delim, esc = s.delimiter.encode(), s.escape_char.encode()
         utf8 = s.session_charset == "UTF8"
+        limit = row_limit(w.rules, s)
         tmp = dat.with_name(dat.name + ".tmp")
         seen = 0
         error = ""
@@ -1636,8 +1650,8 @@ class Extractor:
                 return
             if (nf := field_count(rec, delim, esc)) != want:
                 error = f"{ch.job_name}: record {seen} has {nf} fields, expected {want}"
-            elif len(rec.decode("utf-8", "replace") if utf8 else rec) > s.max_row_length:
-                error = (f"{ch.job_name}: record {seen} exceeds max_row_length {s.max_row_length} "
+            elif len(rec.decode("utf-8", "replace") if utf8 else rec) > limit:
+                error = (f"{ch.job_name}: record {seen} exceeds the record limit {limit} "
                          "(changed after the precheck?); raise max_row_length")
             else:
                 fh.write(rec)

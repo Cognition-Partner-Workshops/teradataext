@@ -1,0 +1,2 @@
+<TS> | <CYCLE_ID>-4573 | TDX_DB.BIG | failed | rows=0 | files=0 | chunks=3/4 | method=- | elapsed=<S>s | watermark=- | fexp failed (rc=12): *** Failure 3707 Syntax error, expected something. (see tdx_db_big.part002.fexp.log)
+<TS> | <LAST_RUN_ID> | TDX_DB.BIG | done | rows=25 | files=4 | chunks=4/4 | method=fexp | elapsed=<S>s | watermark=- | ok

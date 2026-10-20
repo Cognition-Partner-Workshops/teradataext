@@ -1,2 +1,6 @@
-__pycache__/
-*.pyc
+# The repository root ignores data/ metadata/ logs/ work/ (utility outputs); the golden snapshots
+# keep files with those names.
+!/golden/*/data/
+!/golden/*/logs/
+!/golden/*/metadata/
+!/golden/*/work/

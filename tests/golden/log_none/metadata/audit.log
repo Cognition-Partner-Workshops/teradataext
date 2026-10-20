@@ -1,0 +1,1 @@
+<TS> | <LAST_RUN_ID> | TDX_DB.BIG | failed | rows=0 | files=0 | chunks=3/4 | method=- | elapsed=<S>s | watermark=- | fexp failed (rc=12): Teradata error 3707 (see tdx_db_big.part002.fexp.log)

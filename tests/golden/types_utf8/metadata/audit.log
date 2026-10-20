@@ -1,0 +1,4 @@
+<TS> | <LAST_RUN_ID> | TDX_DB.TYPES | done | rows=3 | files=1 | chunks=1/1 | method=bteq | elapsed=<S>s | watermark=- | ok
+<TS> | <LAST_RUN_ID> | TDX_DB.LOBS | done | rows=2 | files=1 | chunks=1/1 | method=bteq | elapsed=<S>s | watermark=- | ok
+<TS> | <LAST_RUN_ID> | TDX_DB.HASHED | done | rows=25 | files=4 | chunks=4/4 | method=fexp | elapsed=<S>s | watermark=- | ok
+<TS> | <LAST_RUN_ID> | TDX_DB.DATED | done | rows=20 | files=3 | chunks=3/3 | method=fexp | elapsed=<S>s | watermark=- | ok

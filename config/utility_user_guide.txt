@@ -14,17 +14,17 @@ CONTENTS
    4. Credentials
    5. Main configuration (config/main_config.ini)
    6. Source table definitions (config/source_tables.ini)
-   7. Running the utility (CLI options, exit codes)
+   7. Running the utility (CLI options, exit codes, single-instance lock)
    8. Extraction state, resume and restart
    9. Chunking
   10. CDC (incremental) extraction
   11. FastExport vs BTEQ selection
   12. Session-limit retry
-  13. Output data file format and escaping
+  13. Output data file format, escaping and raw decoding
   14. Type mapping
   15. Metadata file
   16. Audit log
-  17. Zip, integrity test and raw file deletion
+  17. Archive (.tar.gz), integrity test and raw file deletion
   18. Executive summary
   19. Troubleshooting
   20. Loading into Amazon Redshift
@@ -45,24 +45,43 @@ files suitable for loading into another database (Amazon Redshift COPY in partic
   * records progress after every chunk so an interrupted or failed run can be resumed;
   * never truncates or silently alters data: a table that cannot be exported losslessly
     is marked failed;
-  * writes a metadata file per table, an audit log, zips the output and prints an
-    executive summary.
+  * writes a metadata file per table, an audit log, archives the output (.tar.gz) and
+    prints an executive summary.
 
-It is a lightweight UNIX utility: one shell entrypoint (teradata_extract.sh) and one
-Python 3.12 module (src/extract.py) using the standard library only.
+It is a lightweight UNIX utility written in bash and POSIX awk: one shell entrypoint
+(teradata_extract.sh) and an engine of bash and awk files under lib/. Apart from
+Teradata Tools and Utilities it needs only standard UNIX tools (section 2).
 
 ------------------------------------------------------------------------------------------
 2. PREREQUISITES
 ------------------------------------------------------------------------------------------
 
 Host
-  * UNIX/Linux host with network access to the Teradata system (default port 1025).
-  * Python 3.12 (standard library only, no pip packages). The entrypoint uses the
-    interpreter named in TDX_PYTHON, if set.
+  * Supported systems: Linux, AIX and Solaris, with network access to the Teradata system
+    (default port 1025).
+  * bash 4.3 or later (bash --version). teradata_extract.sh checks the version at
+    startup. AIX and Solaris may ship an older bash or none: install a current bash and
+    put it first on PATH, or start the utility as  /path/to/bash teradata_extract.sh .
+  * A POSIX awk: gawk, mawk, nawk / onetrue awk (original-awk) or busybox awk. The
+    utility runs the command in TDX_AWK, which may include arguments, e.g.
+    TDX_AWK="busybox awk". When TDX_AWK is unset the utility uses /usr/xpg4/bin/awk on
+    Solaris if it exists (/usr/bin/awk there is the old, non-POSIX awk), otherwise awk
+    from PATH. mawk or gawk is recommended for speed (section 13).
+  * od, gzip, tar and mkfifo (standard on all supported systems).
+  * One SHA-256 tool. The first one found is used, in this order: sha256sum,
+    shasum -a 256, openssl dgst -sha256, digest -a sha256 (Solaris).
   * Teradata Tools and Utilities (TTU) 16.20 with FastExport (fexp) and BTEQ (bteq) on
     PATH, or configured with absolute paths in fexp_path / bteq_path.
-  * Disk space in output_dir for the raw .dat files plus their zip (the raw files are
-    removed after a successful zip unless keep_raw_after_zip = true).
+  * bc (POSIX), only for range chunks on DECIMAL/NUMBER keys with a scale or on integer
+    keys longer than 18 digits (section 9). Without bc such a table fails with a clear
+    error; other tables are not affected.
+  * Disk space in output_dir for the raw export (.raw) of each running job, the .dat
+    files and their .tar.gz archive (the .dat files are removed after a successful
+    archive check unless keep_raw_after_zip = true).
+
+Startup checks: bash >= 4.3, the awk and od are always checked. gzip, tar, mkfifo, a
+SHA-256 tool and fexp/bteq are checked too, except with --status or --help. A missing
+item ends the run with exit code 2 before anything is extracted.
 
 Teradata user rights (logon user)
   * SELECT on every source table (or view) to be extracted.
@@ -70,7 +89,8 @@ Teradata user rights (logon user)
     metadata).
   * CREATE TABLE (and DROP TABLE) rights in logtable_database (or the user's default
     database when logtable_database is empty) for the FastExport restart log tables
-    tdx_lt_<hash>.
+    tdx_lt_<hash> (<hash> = the first 12 hex digits of the SHA-256 of the job id; earlier
+    versions used SHA-1, so the names differ from theirs).
   * Enough spool space for the largest export query / chunk.
   * The system must allow FastExport (utility) sessions for this user; the number of
     concurrent utility jobs is limited by the system (see section 12).
@@ -82,8 +102,11 @@ Teradata user rights (logon user)
   1. Copy the utility directory to the host, e.g. /opt/teradataext. The directory that
      contains teradata_extract.sh is the "utility root".
   2. chmod 755 teradata_extract.sh
-  3. Check the tools:      fexp -h ; bteq -h ; python3.12 --version
-     (if python3.12 is not the default interpreter: export TDX_PYTHON=/path/to/python3.12)
+  3. Check the tools:      bash --version ; fexp -h ; bteq -h
+     Choose the awk if the default one is slow or not POSIX (section 2, section 13):
+       export TDX_AWK=/usr/bin/mawk
+     Optional, no Teradata needed: tests/run_tests.sh --awk "${TDX_AWK:-awk}" runs the
+     test suite with fake fexp/bteq tools on this host.
   4. Edit config/main_config.ini (at least [teradata] host) and config/source_tables.ini.
   5. config/process_state.ini.example shows the state format only. The real
      config/process_state.ini is created on the first run; do not copy the example there.
@@ -120,7 +143,8 @@ output (logs/) have the password replaced by ********.
 5. MAIN CONFIGURATION (config/main_config.ini)
 ------------------------------------------------------------------------------------------
 
-The file is read with Python configparser with interpolation disabled. Comments must be on
+The file is read by the utility's own INI parser (lib/ini.awk), which accepts a
+configparser-compatible subset: key = value, no interpolation. Comments must be on
 their own line, starting with # or ;. Inline comments are NOT supported: in
 "parallel = 4 ; comment" the value would be "4 ; comment". A different file can be used
 with --config PATH.
@@ -143,10 +167,12 @@ with --config PATH.
 [paths]
   base_dir           Base for all relative paths. Empty = parent of the directory holding
                      main_config.ini (the utility root for config/main_config.ini).
-  output_dir         .dat and .zip files (default data).
+  output_dir         .dat and .tar.gz files (default data).
   metadata_dir       .meta.ini files and audit.log (default metadata).
   log_dir            Run log and per-job tool output (default logs).
-  work_dir           Generated scripts (password masked) and the lock file (default work).
+  work_dir           Generated scripts (password masked), the lock directory
+                     .process_state.lock/ and the per-run temporary directory
+                     .tdx-run-<pid>/ (default work).
   source_tables_file Table definitions (default config/source_tables.ini).
   process_state_file Machine-managed state (default config/process_state.ini).
 
@@ -170,8 +196,10 @@ with --config PATH.
                           Capped at 63999 (31999 for tables with UNICODE columns): the
                           record is cast to VARCHAR(limit + 1), and Teradata allows 64000
                           LATIN / 32000 UNICODE characters.
-  zip_on_complete         true = zip a table's files when it is done (section 17).
-  keep_raw_after_zip      false = delete the .dat files after a successful zip test.
+  zip_on_complete         true = archive a table's files as .tar.gz when it is done
+                          (section 17; the key name is kept for compatibility).
+  keep_raw_after_zip      false = delete the .dat files after the archive passed its
+                          integrity check.
   retry_attempts          Session-limit retries per job (section 12).
   retry_delay_seconds     Wait before each session-limit retry.
   session_limit_errors    Comma-separated error codes treated as session-limit failures.
@@ -245,20 +273,40 @@ names use <db>_<table> lower-cased with characters outside [A-Za-z0-9_] replaced
                              does not connect to Teradata.
   --status                   Print the state summary and exit; does not connect.
   -v, --verbose              DEBUG logging on the console.
+  -h, --help                 Show the usage and exit.
 
 Environment variables
   TD_USER, TD_PASS   Credentials (section 4).
-  TDX_PYTHON         Python interpreter used by teradata_extract.sh.
+  TDX_AWK            awk command used by the engine, arguments allowed (e.g.
+                     "busybox awk"); default and Solaris rule in section 2. The test
+                     suite runs every awk variant through it.
   TDX_FEXP, TDX_BTEQ Override fexp_path / bteq_path (the tests use them for fake tools).
 
 Exit codes
   0    all queued tables done
   1    at least one table failed (others may be done; rerun to resume)
   2    configuration, credential, tool or lock error - nothing extracted
-  130  interrupted (Ctrl-C / SIGINT); state saved, resumable
+  130  interrupted (Ctrl-C / SIGINT or SIGTERM): the running fexp/bteq jobs are
+       stopped, state is saved; resumable
 
-Only one instance can run against a state file at a time (flock on
-work/.process_state.lock). A second instance ends with exit 2.
+Single-instance lock: only one instance can run against a work directory (and its state
+file) at a time. At startup the utility creates the directory work/.process_state.lock/
+(mkdir is atomic) and writes its process id to work/.process_state.lock/pid. A second
+instance finds the lock held by a running process and ends with exit 2.
+
+If a run was killed without cleaning up (kill -9, host crash), the lock directory stays
+behind. The next run sees that the recorded pid is no longer running, removes the stale
+lock automatically and continues. To clear a lock by hand, first make sure no instance
+is running:
+
+  cat work/.process_state.lock/pid ; ps -p <pid>     (no such process -> stale)
+  rm -rf work/.process_state.lock
+
+The pid check only sees processes on the local host: do not share one work_dir between
+hosts.
+
+Per-run temporary files (among them the working copy of the state) are kept in
+work/.tdx-run-<pid>/ and removed when the run exits.
 
 Examples
   ./teradata_extract.sh --dry-run
@@ -273,12 +321,13 @@ Examples
 ------------------------------------------------------------------------------------------
 
 config/process_state.ini is MACHINE-MANAGED. Do not edit it; use the CLI options. It is
-rewritten atomically (temporary file, fsync, rename) after every chunk and table status
-change, so it is consistent even after a crash or kill.
+rewritten atomically (temporary file in the same directory, then mv, which is an atomic
+rename on the same file system) after every chunk and table status change, under the
+lock described in section 7, so it is consistent even after a crash or kill.
 
 It holds a [_run] section (cycle_id, last_run_id, last run start/finish), one section per
 table (DATABASE.TABLE: status, attempts, method, row estimate, chunk plan, chunks_done,
-rows, files, checksum, zip, watermark/pending_watermark, timings, last_error) and one
+rows, files, checksum, archive, watermark/pending_watermark, timings, last_error) and one
 section per chunk (DATABASE.TABLE/partNNN: status, rows, file, bytes, sha256, method,
 sessions, chunk predicate). Status values: pending, in_progress, done, failed.
 
@@ -321,6 +370,14 @@ Chunk column / strategy:
     (chunk_strategy = hash). Hash chunks are roughly equal when the PI is well
     distributed; a skewed PI gives skewed chunks.
   * unchunked tables have chunk_strategy = none and no .partNNN suffix.
+
+Range boundaries: integer and DATE keys are split with exactly the same formula as in
+earlier versions. For DECIMAL/NUMBER keys with a scale, and integer keys longer than 18
+digits, the boundaries are computed with bc (section 2; without bc the table fails with a
+clear error). Boundaries of keys with a scale are computed with 10 decimal places beyond that scale, so their literals
+in the chunk predicates (where in the state file, the work/ scripts) may differ textually
+from those of the former engine. Coverage is unchanged: every value, including NULL and
+values outside the MIN..MAX read at planning time, still falls into a chunk.
 
 Range chunks on skewed data can be uneven. For tables with a poor PI, set chunk_column to
 a well-distributed numeric/date column. The static where filter is ANDed into every chunk.
@@ -391,7 +448,7 @@ workload management (TASM/TDWM) rules. Check session_limit_errors and
 session_limit_patterns against your system's message catalog and real fexp/bteq output.
 
 ------------------------------------------------------------------------------------------
-13. OUTPUT DATA FILE FORMAT AND ESCAPING
+13. OUTPUT DATA FILE FORMAT, ESCAPING AND RAW DECODING
 ------------------------------------------------------------------------------------------
 
   * File: data/<db>_<table>[.partNNN].dat; no header line.
@@ -414,6 +471,36 @@ Row 1002: NAME is NULL and NOTE is an empty string. Row 1001: NOTE is "Rush | fr
 During export the tool writes <final>.raw (binary record layout); it is converted to the
 .dat file and removed. Row counts are taken from the raw file and must match the counts
 reported by fexp/bteq, otherwise the job fails.
+
+Raw decoding
+  The raw file is read with od (od -An -v -tu1, run with LC_ALL=C) and decoded by
+  lib/rawdecode.awk, run with the awk selected by TDX_AWK (section 2). The layout (with or
+  without the record-length prefix and end-of-record byte) is auto-detected; the job
+  fails when no layout fits the whole file. Every byte passes through unchanged, except
+  that a NUL (0x00) byte inside a record fails the job: portable awks cannot write NUL
+  bytes, and the utility never drops or alters data silently (section 19).
+
+  Decoding runs after the export of each job (table or chunk) has finished, as part of
+  that job, so it adds to the job's elapsed time. Jobs running in parallel decode
+  independently, each with its own od | awk pipeline.
+
+Decoder performance
+  Measured decoder throughput for a 48 MB raw file with 200,000 records:
+
+    mawk                                            ~4 MB/s
+    gawk                                            ~3.3 MB/s
+    onetrue awk (typical AIX/Solaris nawk-class)    ~1.2 MB/s
+    busybox awk                                     ~0.6 MB/s
+    (former engine, for comparison                  ~230 MB/s)
+
+  For example, 1 GB of raw export takes about 4 minutes to decode with mawk and about
+  14 minutes with a nawk-class awk. Recommendations:
+    * Install mawk or gawk where available and select it, e.g.
+        export TDX_AWK=/usr/bin/mawk
+    * For big tables, run more jobs in parallel: raise parallel (and max_sessions, if
+      the Teradata system allows it) and lower chunk_rows so that the table is split
+      into more chunks; each job decodes its own chunk, using about one CPU.
+    * [VALIDATE] Throughput depends on the CPU and the data; measure on your host.
 
 ------------------------------------------------------------------------------------------
 14. TYPE MAPPING
@@ -486,18 +573,40 @@ Append-only; one line per table per run:
 (one physical line; wrapped here). skipped = already done in the current cycle.
 
 ------------------------------------------------------------------------------------------
-17. ZIP, INTEGRITY TEST AND RAW FILE DELETION
+17. ARCHIVE (.TAR.GZ), INTEGRITY TEST AND RAW FILE DELETION
 ------------------------------------------------------------------------------------------
 
-With zip_on_complete = true, when all chunks of a table are done its .dat files are zipped
-into data/<db>_<table>_<cycle_id>.zip. The zip is then integrity-tested (read back and
-CRC-checked); its SHA-256 is recorded as zip_sha256. Only after a successful test, and
-only when keep_raw_after_zip = false, are the raw .dat files deleted. checksum_sha256 in
-the state file is the SHA-256 over the per-chunk SHA-256 hex strings joined by LF, in
-chunk order; each chunk's sha256 is in its [DB.TABLE/partNNN] section.
+With zip_on_complete = true, when all chunks of a table are done its .dat files are
+archived into data/<db>_<table>_<cycle_id>.tar.gz (earlier versions wrote a .zip). The
+config keys zip_on_complete and keep_raw_after_zip and the state keys zip_file and
+zip_sha256 keep their names for compatibility; they refer to the .tar.gz archive.
 
-Verify a zip by hand:   unzip -t data/sales_orders_<cycle_id>.zip
-                        sha256sum data/sales_orders_<cycle_id>.zip
+The archive is built and checked with standard tools only (no GNU tar -z):
+
+  1. tar cf - <the table's .dat files> | gzip -c > <name>.tar.gz.tmp
+  2. gzip -t <name>.tar.gz.tmp                 the compressed stream is intact
+  3. gzip -dc <name>.tar.gz.tmp | tar tf -     the member list must equal the
+                                               table's .dat file names
+  4. the file is renamed to <name>.tar.gz and its SHA-256 is recorded as zip_sha256
+     (SHA-256 tool: section 2).
+
+Only after these checks, and only when keep_raw_after_zip = false, are the raw .dat
+files deleted. checksum_sha256 in the state file is the SHA-256 over the per-chunk
+SHA-256 hex strings joined by LF, in chunk order; each chunk's sha256 is in its
+[DB.TABLE/partNNN] section.
+
+Verify an archive by hand:
+
+  gzip -t data/sales_orders_<cycle_id>.tar.gz
+  gzip -dc data/sales_orders_<cycle_id>.tar.gz | tar tf -
+  sha256sum data/sales_orders_<cycle_id>.tar.gz     (compare with zip_sha256; or
+                                                     shasum -a 256, openssl dgst -sha256,
+                                                     digest -a sha256)
+
+Unpack portably (works with the tar of Linux, AIX and Solaris):
+
+  mkdir -p /stage/sales_orders && cd /stage/sales_orders
+  gzip -dc /opt/teradataext/data/sales_orders_<cycle_id>.tar.gz | tar xf -
 
 ------------------------------------------------------------------------------------------
 18. EXECUTIVE SUMMARY
@@ -509,7 +618,7 @@ Printed on stdout at exit, e.g.:
   Run id        : 20261020T013200Z-12345
   Tables        : done=3 failed=1 pending=0 (queued=4, skipped already done=2)
   Rows exported : 1,234,567
-  Files written : 9 (.dat) / 3 (.zip)
+  Files written : 9 (.dat) / 3 (.tar.gz)
   Elapsed       : 00:12:34
   FAILED        : SALES.BIG_LOB - LOB value length 40000 exceeds lob_max_length 32000
   ==================================================================
@@ -528,8 +637,12 @@ Exit code 2 (nothing extracted)
   * "credentials" - set both TD_USER and TD_PASS, or fix credentials_file
     (exists, owned by you, chmod 600).
   * "tool not found" - fexp/bteq not on PATH; set fexp_path/bteq_path or fix PATH.
+  * bash older than 4.3, or awk, od, gzip, tar, mkfifo or a SHA-256 tool missing -
+    install it or fix PATH; select the awk with TDX_AWK (section 2).
   * connect check failed - host/port wrong, DNS, firewall; test: nc -vz <host> 1025.
-  * lock - another instance is running (work/.process_state.lock).
+  * lock - another instance is running (its pid is in work/.process_state.lock/pid).
+    A stale lock left by a killed run is removed automatically; see section 7 to clear
+    one by hand.
   * configuration error - message names the file/section/key; remember: no inline
     comments.
 
@@ -557,10 +670,19 @@ Table marked failed (exit 1)
   * "record length ... exceeds max_row_length" - raise max_row_length if the tools and
     target allow it.
   * "unsupported type" - UDT/ARRAY/etc.: export through a view that casts the column.
+  * "bc is required for range chunks on this key" - install bc (section 2), or set
+    chunk_column to an integer or DATE column.
   * non-LATIN column with ASCII - set session_charset = UTF8.
   * row count mismatch / raw layout not recognised - check the tool log; report it with
     the work/ script and tool versions.
+  * NUL byte in a record - a value contains a 0x00 byte, which cannot be written by a
+    portable awk (section 13). Export the table through a view that removes or replaces
+    the byte in the affected column, or converts the column to hex [VALIDATE].
   Fix the cause and rerun: done chunks are skipped.
+
+Slow jobs
+  * A long gap between the end of fexp/bteq (tool log) and the chunk being marked done
+    is raw decoding. Use mawk or gawk (TDX_AWK) and more, smaller chunks (section 13).
 
 ------------------------------------------------------------------------------------------
 20. LOADING INTO AMAZON REDSHIFT
@@ -571,7 +693,7 @@ extracted samples (including NULLs, empty strings, embedded |, \ and line breaks
 decimals, time zone and binary columns) before production loads.
 
 Create target tables from the redshift_type values in the .meta.ini files. Upload the
-.dat files (unzipped) to S3, then load with COPY:
+.dat files (unpacked from the .tar.gz, section 17) to S3, then load with COPY:
 
   COPY sales.orders
   FROM 's3://my-bucket/extract/sales_orders.part'
@@ -649,7 +771,7 @@ Further target notes [VALIDATE]:
 ------------------------------------------------------------------------------------------
 
   teradata_extract.sh                          entrypoint
-  src/extract.py                               engine (Python 3.12, stdlib only)
+  lib/*.sh, lib/*.awk                          engine (bash 4.3+, POSIX awk)
   config/main_config.ini                       main configuration (user-maintained)
   config/source_tables.ini                     table definitions (user-maintained)
   config/process_state.ini                     extraction state (MACHINE-MANAGED)
@@ -657,9 +779,12 @@ Further target notes [VALIDATE]:
   config/utility_user_guide.txt                this guide
   metadata/<db>_<table>.meta.ini               per-table metadata
   metadata/audit.log                           audit log
-  data/<db>_<table>[.partNNN].dat              data files (removed after zip by default)
-  data/<db>_<table>_<cycle_id>.zip             zipped data files
+  data/<db>_<table>[.partNNN].dat              data files (removed after archiving by
+                                               default)
+  data/<db>_<table>_<cycle_id>.tar.gz          archived data files
   logs/extract_<run_id>.log                    run log
   logs/<db>_<table>[.partNNN].<fexp|bteq>.log  per-job tool output (password masked)
   work/<db>_<table>[.partNNN].<fexp|bteq>      generated scripts (LOGON masked)
-  work/.process_state.lock                     single-instance lock
+  work/.process_state.lock/                    single-instance lock (directory with pid)
+  work/.tdx-run-<pid>/                         per-run temporary files (removed at exit)
+  tests/run_tests.sh                           test suite (fake fexp/bteq; no Teradata)

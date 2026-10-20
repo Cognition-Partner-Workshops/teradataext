@@ -1,0 +1,10 @@
+.SET SESSION CHARSET 'ASCII';
+.LOGON tdfake.example.com/tdx_test_user,********
+.SET ERROROUT STDOUT;
+.SET ERRORLEVEL UNKNOWN SEVERITY 8;
+.EXPORT DATA FILE = <ROOT>/work/tdx_db_lob_big.check.q1.raw;
+/* TDX query=lobcheck db=TDX_DB table=LOB_BIG cols=NOTES */ SELECT COALESCE(OREPLACE(OREPLACE(TRIM(CAST(MAX(CHARACTER_LENGTH("NOTES")) AS VARCHAR(256)))), '\', '\\'), '|', '\|'), '\N') FROM "TDX_DB"."LOB_BIG";
+.IF ERRORCODE <> 0 THEN .QUIT 8;
+.EXPORT RESET;
+.LOGOFF;
+.QUIT 0;

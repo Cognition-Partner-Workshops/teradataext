@@ -1,0 +1,8 @@
+==================== TERADATA EXTRACT SUMMARY ====================
+Run id        : <LAST_RUN_ID>
+Tables        : done=0 failed=1 pending=0 (queued=1, skipped already done=0)
+Rows exported : 0
+Files written : 0 (.dat) / 0 (.tar.gz)
+Elapsed       : <HMS>
+FAILED        : TDX_DB.TYPES - unsupported column(s): CH_U CHAR(10) CHARACTER SET UNICODE: UNICODE column cannot be exported losslessly with session_charset = ASCII; use UTF8; VC_U VARCHAR(50) CHARACTER SET UNICODE: UNICODE column cannot be exported losslessly with session_charset = ASCII; use UTF8
+==================================================================

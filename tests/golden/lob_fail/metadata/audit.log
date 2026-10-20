@@ -1,0 +1,3 @@
+<TS> | <LAST_RUN_ID> | TDX_DB.MIXED | done | rows=4 | files=1 | chunks=1/1 | method=bteq | elapsed=<S>s | watermark=- | ok
+<TS> | <LAST_RUN_ID> | TDX_DB.LOB_BIG | failed | rows=0 | files=0 | chunks=0/1 | method=- | elapsed=<S>s | watermark=- | LOB value length 50000 in NOTES exceeds lob_max_length 1000
+<TS> | <LAST_RUN_ID> | TDX_DB.BIG | done | rows=25 | files=4 | chunks=4/4 | method=fexp | elapsed=<S>s | watermark=- | ok

@@ -1,0 +1,8 @@
+==================== TERADATA EXTRACT SUMMARY ====================
+Run id        : <LAST_RUN_ID>
+Tables        : done=0 failed=1 pending=0 (queued=1, skipped already done=0)
+Rows exported : 0
+Files written : 0 (.dat) / 0 (.tar.gz)
+Elapsed       : <HMS>
+FAILED        : TDX_DB.BIG - fexp failed (rc=12): Teradata error 3707 (see tdx_db_big.part002.fexp.log)
+==================================================================

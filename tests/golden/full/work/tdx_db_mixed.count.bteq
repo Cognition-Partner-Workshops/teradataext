@@ -1,0 +1,10 @@
+.SET SESSION CHARSET 'ASCII';
+.LOGON tdfake.example.com/tdx_test_user,********
+.SET ERROROUT STDOUT;
+.SET ERRORLEVEL UNKNOWN SEVERITY 8;
+.EXPORT DATA FILE = <ROOT>/work/tdx_db_mixed.count.q1.raw;
+/* TDX query=count db=TDX_DB table=MIXED */ SELECT COALESCE(OREPLACE(OREPLACE(TRIM(CAST(CAST(COUNT(*) AS BIGINT) AS VARCHAR(256)))), '\', '\\'), '|', '\|'), '\N') FROM "TDX_DB"."MIXED";
+.IF ERRORCODE <> 0 THEN .QUIT 8;
+.EXPORT RESET;
+.LOGOFF;
+.QUIT 0;

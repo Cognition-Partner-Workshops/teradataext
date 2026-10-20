@@ -1,0 +1,7 @@
+==================== TERADATA EXTRACT SUMMARY ====================
+Run id        : <LAST_RUN_ID>
+Tables        : done=3 failed=0 pending=0 (queued=3, skipped already done=0)
+Rows exported : 32
+Files written : 6 (.dat) / 3 (.tar.gz)
+Elapsed       : <HMS>
+==================================================================

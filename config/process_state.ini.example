@@ -4,6 +4,7 @@
 # SAMPLE ONLY: this file shows the format of config/process_state.ini, which the utility
 # creates on the first run and rewrites atomically after every chunk/table transition.
 # Do not copy it to process_state.ini: its entries would be taken as real state.
+# zip_file / zip_sha256 keep their names for compatibility; they refer to the .tar.gz.
 
 [_run]
 cycle_id = 20261020T013200Z
@@ -24,7 +25,7 @@ chunks_done = 1,2,3,4
 rows_exported = 19100338
 files = sales_orders.part001.dat,sales_orders.part002.dat,sales_orders.part003.dat,sales_orders.part004.dat
 checksum_sha256 = 2e06e112db50afe72a2fa66362268e2e15e2604b2749a89239fa0ae23649feef
-zip_file = sales_orders_20261020T013200Z.zip
+zip_file = sales_orders_20261020T013200Z.tar.gz
 zip_sha256 = 18e6462c35edb00cca5542fd1932b2258d4402bfa6ec3dccb17a702c2b0e9421
 watermark =
 pending_watermark =
@@ -170,7 +171,7 @@ chunks_done =
 rows_exported = 48211
 files = sales_customer.dat
 checksum_sha256 = a932346e6b05c54a39e8669f15d414ec7f756c80dc43fdd494560c8af355565b
-zip_file = sales_customer_20261020T013200Z.zip
+zip_file = sales_customer_20261020T013200Z.tar.gz
 zip_sha256 = 826b7eabe91c0457346e0fd99f2d9186cea69ddcf8a43d2aaaa904ad3ea30396
 watermark = 2026-10-19 23:59:58.123456
 pending_watermark =

@@ -1,0 +1,7 @@
+State file : <ROOT>/config/process_state.ini
+Cycle id   : <CYCLE_ID>
+Last run   : -
+TABLE                                    STATUS       CHUNKS              ROWS  WATERMARK / ERROR
+TDX_DB.MIXED                             pending      0/-                    0  
+TDX_DB.BIG                               pending      0/-                    0  
+TDX_DB.CDC                               pending      0/-                    0  

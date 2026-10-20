@@ -1,29 +1,31 @@
 # teradataext design contract
 
-This is the interface contract between `teradata_extract.sh`, `src/extract.py`, the sample
+This is the interface contract between `teradata_extract.sh`, the `lib/` engine, the sample
 configuration, the documentation and the test suite. Anything not covered here is an
-implementation detail of `src/extract.py`.
+implementation detail of `lib/`.
 
 Target: Teradata Database 16.20, Teradata Tools and Utilities (`fexp`, `bteq`) on a
-UNIX/Linux host, Python 3.12 **standard library only**.
+UNIX/Linux host (Linux, AIX, Solaris). **No Python**: bash 4.3+, any POSIX awk and POSIX
+utilities only (section 13). The behaviour is that of the former Python 3.12 engine
+(`src/extract.py`, removed; see git history), apart from the archive format (tar.gz).
 
 ## 1. Directory layout (utility root = directory containing `teradata_extract.sh`)
 
 ```
 teradata_extract.sh          entrypoint
-src/extract.py               engine (single module, stdlib only)
+lib/*.sh, lib/*.awk          engine (bash + POSIX awk, section 13)
 config/main_config.ini       user-maintained
 config/source_tables.ini     user-maintained
 config/process_state.ini     MACHINE-MANAGED (created on first run)
 config/utility_user_guide.txt
 metadata/<db>_<table>.meta.ini
 metadata/audit.log
-data/<db>_<table>[.partNNN].dat     (raw, removed after zip unless keep_raw_after_zip=true)
-data/<db>_<table>_<cycle_id>.zip
+data/<db>_<table>[.partNNN].dat     (raw, removed after archiving unless keep_raw_after_zip=true)
+data/<db>_<table>_<cycle_id>.tar.gz
 logs/extract_<run_id>.log           run log
 logs/<db>_<table>[.partNNN].<fexp|bteq>.log   per-job tool output (password masked)
 work/<db>_<table>[.partNNN].<fexp|bteq>       generated scripts, LOGON line masked
-work/.process_state.lock            flock() single-instance guard
+work/.process_state.lock/           mkdir() single-instance guard (holds `pid`; stale if that pid is gone)
 ```
 
 `<db>_<table>` uses the names as written in `source_tables.ini`, lower-cased, with any
@@ -36,7 +38,7 @@ empty it defaults to the parent directory of the directory that holds `main_conf
 
 ## 2. Command line
 
-`teradata_extract.sh [options]` passes all options to `src/extract.py`.
+`teradata_extract.sh [options]` (the engine is sourced from `lib/`).
 
 | Option | Meaning |
 |---|---|
@@ -53,13 +55,13 @@ empty it defaults to the parent directory of the directory that holds `main_conf
 Exit codes: `0` all queued tables done; `1` at least one table failed; `2` configuration,
 credential, tool or lock error (nothing extracted); `130` interrupted (state saved, resumable).
 
-Environment variables: `TD_USER`, `TD_PASS` (credentials), `TDX_PYTHON` (interpreter used by
-the shell entrypoint), `TDX_FEXP` / `TDX_BTEQ` (override `fexp_path` / `bteq_path`; used by tests
-to point at fake binaries).
+Environment variables: `TD_USER`, `TD_PASS` (credentials), `TDX_AWK` (awk binary, default
+`awk`; tests run every awk variant through it), `TDX_FEXP` / `TDX_BTEQ` (override `fexp_path` /
+`bteq_path`; used by tests to point at fake binaries).
 
 ## 3. `config/main_config.ini`
 
-configparser with `interpolation=None`; full-line comments only (`#` or `;`), no inline comments.
+INI (configparser-compatible subset: `key = value`, no interpolation); full-line comments only (`#` or `;`), no inline comments.
 
 ```ini
 [teradata]
@@ -95,8 +97,8 @@ row_estimate = stats           ; stats (DBC.StatsV, fallback COUNT(*)) | count
 char_trim = right              ; right | both | none   (CHAR columns only)
 lob_max_length = 32000         ; max characters (CLOB/JSON/XML) or bytes (BLOB) exported per value
 max_row_length = 63999         ; max exported record length (characters)
-zip_on_complete = true
-keep_raw_after_zip = false
+zip_on_complete = true         ; archive each finished table as <db>_<table>_<cycle>.tar.gz
+keep_raw_after_zip = false     ; keep the .dat files after the archive passed its integrity test
 retry_attempts = 3
 retry_delay_seconds = 60
 session_limit_errors = 2633,3130
@@ -132,8 +134,8 @@ The table key used everywhere else is `DATABASE.TABLE` upper-cased.
 
 ## 5. `config/process_state.ini` (machine-managed)
 
-Written atomically (temp file in the same directory, `fsync`, `os.replace`) after every
-chunk/table transition, under a thread lock. First lines:
+Written atomically (temp file in the same directory, then `mv`, which is an atomic rename on
+the same file system) after every chunk/table transition, under a `mkdir` lock. First lines:
 
 ```
 # THIS FILE IS MANAGED BY teradata_extract - DO NOT EDIT.
@@ -162,7 +164,7 @@ chunks_done = 1,2,4            ; 1-based chunk numbers already done
 rows_exported = 25
 files = sales_orders.part001.dat,...
 checksum_sha256 = <sha256 over the per-chunk sha256 hex strings joined by "\n", in chunk order>
-zip_file = sales_orders_20261020T013200Z.zip
+zip_file = sales_orders_20261020T013200Z.tar.gz   ; key names kept for compatibility
 zip_sha256 = ...
 watermark = 2024-03-01 00:00:00.000000   ; last committed CDC high-water mark
 pending_watermark = ...                  ; upper bound captured for the in-flight cycle
@@ -251,14 +253,14 @@ FastExport script shape:
 .LOGOFF;
 ```
 
-### Raw export layouts (parsed by extract.py into the final .dat file)
+### Raw export layouts (decoded by lib/rawdecode.awk into the final .dat file)
 
 All lengths are unsigned 16-bit little-endian.
 
 * FastExport `FORMAT TEXT` with one VARCHAR column: `varchar_len, payload, 0x0A` per record.
 * BTEQ `.EXPORT DATA`: `record_len (= varchar_len + 2), varchar_len, payload, 0x0A` per record.
 
-`extract.py` auto-detects the layout (with or without the record-length prefix, with or
+The engine auto-detects the layout (with or without the record-length prefix, with or
 without the 0x0A end-of-record byte) by checking that the whole file parses consistently, and
 fails the job if no layout fits. The raw file is `<final>.raw`, removed after conversion.
 
@@ -334,7 +336,7 @@ Append-only, one line per table per run:
 Run id        : ...
 Tables        : done=3 failed=1 pending=0 (queued=4, skipped already done=2)
 Rows exported : 1,234,567
-Files written : 9 (.dat) / 3 (.zip)
+Files written : 9 (.dat) / 3 (.tar.gz)
 Elapsed       : 00:12:34
 FAILED        : SALES.BIG_LOB - LOB value length 40000 exceeds lob_max_length 32000
 ==================================================================
@@ -342,10 +344,48 @@ FAILED        : SALES.BIG_LOB - LOB value length 40000 exceeds lob_max_length 32
 
 ## 12. Tests
 
-`python3.12 -m unittest discover -s tests -v` (stdlib unittest only).
-`tests/fakes/fexp` and `tests/fakes/bteq` are executable Python stand-ins driven by a JSON
-fixture (`TDX_FAKE_FIXTURE`), selected with `TDX_FEXP` / `TDX_BTEQ`. They read the script from
-stdin, require a `.LOGON` line, answer each marked request from the fixture, write raw files
-in the layouts of section 7, print the row-count lines of section 7, and can simulate failures
-(e.g. `*** Failure 2633 Too many load/unload tasks running now.` with a non-zero exit) a
-configurable number of times.
+`tests/run_tests.sh` (bash; no Python, no bats). It runs every `tests/test_*.sh` file; a test is a
+shell function `test_*`, assertions come from `tests/lib/assert.sh`. `TDX_AWK` selects the awk
+under test (`tests/run_tests.sh --awk mawk` etc.). `tests/fakes/fexp` and `tests/fakes/bteq` are
+bash + awk stand-ins with the behaviour described in `tests/fakes/README.md` (same request
+protocol, raw layouts, row-count lines and failure simulation as before; fixtures are plain text,
+not JSON). `tests/golden/<scenario>/` holds normalized outputs captured from the former Python
+engine (timestamps, run/cycle ids, temp paths, `tdx_lt_<hash>`, archive name/sha replaced by
+placeholders; archives stored as their sorted member list). The golden tests run the same
+scenarios and compare outputs byte for byte after the same normalization.
+
+## 13. bash engine
+
+| File | Responsibility |
+|---|---|
+| `teradata_extract.sh` | checks bash >= 4.3, awk, `od`, `gzip`, `tar`, a SHA-256 tool, `fexp`/`bteq` (not for `--status`/`--dry-run` beyond PATH lookup); creates dirs; sources `lib/*.sh`; runs `tdx_main "$@"` |
+| `lib/common.sh` | logging (run log + console), errors/exit codes, quoting helpers, UTC time, signal traps |
+| `lib/config.sh` + `lib/ini.awk` | INI parsing into bash associative arrays, settings validation, source tables |
+| `lib/creds.sh` | TD_USER/TD_PASS or credentials file (owner + mode via `ls -ln`) |
+| `lib/state.sh` | process_state.ini read/update/atomic write, `mkdir` lock |
+| `lib/runner.sh` + `lib/mask.awk` | script generation, tool execution (password on stdin via `printf` builtin), masking, `log_tool_output`, error classification, timeout watchdog |
+| `lib/types.sh` | DBC metadata -> column rules / SQL expressions, meta files |
+| `lib/plan.sh` | row estimate, chunk planning, CDC predicates |
+| `lib/extract.sh` | scheduler: background jobs, session pool, retries, fallback |
+| `lib/finalize.sh` | .dat publish, tar.gz archive + integrity check, audit, summary |
+| `lib/rawdecode.awk` | raw export decoder fed by `od -An -v -tu1` (run with `LC_ALL=C`) |
+
+Portability rules: no GNU-only options (`sed -i`, `grep -P`, `date -d`, `stat`, `readlink -f`,
+`timeout`, `flock`, `od -w`, `tar -z`, `mktemp` options beyond `-d`). awk code must run on
+gawk, mawk, onetrue awk (original-awk) and busybox awk.
+
+Archive: `tar cf - <members> | gzip -c > <name>.tar.gz.tmp`, then `gzip -t`, the member list
+(`gzip -dc | tar tf -`) must equal the expected `.dat` names, then rename to `.tar.gz`; its
+SHA-256 is stored in `zip_sha256` before raw files are deleted.
+
+SHA-256: the first available of `sha256sum`, `shasum -a 256`, `openssl dgst -sha256`,
+`digest -a sha256` (Solaris); none -> exit 2 at startup.
+
+Raw decoding: a NUL byte inside a record fails the job (portable awks cannot write NUL). Every
+other byte passes through unchanged. Record length is counted in UTF-8 characters when
+`session_charset = UTF8`, else in bytes, as before.
+
+Range chunks: integer and DATE keys use the former formula exactly (shell 64-bit arithmetic;
+DATE via day numbers). DECIMAL keys with a scale or more than 18 digits get boundaries
+computed in awk; their literals may differ textually from the Python engine, coverage of every
+value (NULL and out-of-range included) is unchanged.

@@ -1,0 +1,8 @@
+==================== TERADATA EXTRACT SUMMARY ====================
+Run id        : <LAST_RUN_ID>
+Tables        : done=2 failed=1 pending=0 (queued=3, skipped already done=0)
+Rows exported : 29
+Files written : 5 (.dat) / 2 (.tar.gz)
+Elapsed       : <HMS>
+FAILED        : TDX_DB.LOB_BIG - LOB value length 50000 in NOTES exceeds lob_max_length 1000
+==================================================================

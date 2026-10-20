@@ -97,8 +97,8 @@ row_estimate = stats           ; stats (DBC.StatsV, fallback COUNT(*)) | count
 char_trim = right              ; right | both | none   (CHAR columns only)
 lob_max_length = 32000         ; max characters (CLOB/JSON/XML) or bytes (BLOB) exported per value
 max_row_length = 63999         ; max exported record length (characters)
-zip_on_complete = true         ; archive each finished table as <db>_<table>_<cycle>.tar.gz
-keep_raw_after_zip = false     ; keep the .dat files after the archive passed its integrity test
+zip_on_complete = true
+keep_raw_after_zip = false
 retry_attempts = 3
 retry_delay_seconds = 60
 session_limit_errors = 2633,3130
@@ -164,7 +164,7 @@ chunks_done = 1,2,4            ; 1-based chunk numbers already done
 rows_exported = 25
 files = sales_orders.part001.dat,...
 checksum_sha256 = <sha256 over the per-chunk sha256 hex strings joined by "\n", in chunk order>
-zip_file = sales_orders_20261020T013200Z.tar.gz   ; key names kept for compatibility
+zip_file = sales_orders_20261020T013200Z.tar.gz
 zip_sha256 = ...
 watermark = 2024-03-01 00:00:00.000000   ; last committed CDC high-water mark
 pending_watermark = ...                  ; upper bound captured for the in-flight cycle
@@ -368,6 +368,7 @@ scenarios and compare outputs byte for byte after the same normalization.
 | `lib/plan.sh` | row estimate, chunk planning, CDC predicates |
 | `lib/extract.sh` | scheduler: background jobs, session pool, retries, fallback |
 | `lib/finalize.sh` | .dat publish, tar.gz archive + integrity check, audit, summary |
+| `lib/main.sh` | CLI parsing, startup checks, job scheduler, interrupt handling |
 | `lib/rawdecode.awk` | raw export decoder fed by `od -An -v -tu1` (run with `LC_ALL=C`) |
 
 Portability rules: no GNU-only options (`sed -i`, `grep -P`, `date -d`, `stat`, `readlink -f`,
@@ -386,6 +387,14 @@ other byte passes through unchanged. Record length is counted in UTF-8 character
 `session_charset = UTF8`, else in bytes, as before.
 
 Range chunks: integer and DATE keys use the former formula exactly (shell 64-bit arithmetic;
-DATE via day numbers). DECIMAL keys with a scale or more than 18 digits get boundaries
-computed in awk; their literals may differ textually from the Python engine, coverage of every
-value (NULL and out-of-range included) is unchanged.
+DATE via day numbers). DECIMAL keys with a scale, and integer keys beyond 18 digits, get their
+boundaries from POSIX `bc` (needed only then; without it the table fails with a clear error).
+Boundaries of keys with a scale are rounded to that scale, so their literals may differ
+textually from the Python engine; coverage of every value (NULL and out-of-range included) is
+unchanged.
+
+Other bash-engine notes: the FastExport log table name is `tdx_lt_` + the first 12 hex digits of
+the SHA-256 (was SHA-1) of the job id. `TDX_AWK` may contain arguments (e.g. `busybox awk`).
+On Solaris `/usr/xpg4/bin/awk` is used when `TDX_AWK` is unset. `lib/main.sh` holds the CLI,
+startup and the job scheduler (each prepare/export job is a background subshell; jobs exchange
+state only through the locked working copy of process_state.ini under `work/.tdx-run-<pid>/`).

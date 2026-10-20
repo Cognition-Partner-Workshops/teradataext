@@ -43,6 +43,11 @@ class TestHelpers(unittest.TestCase):
         self.assertIn(".logon h/u,", tdx.mask_text(".logon h/u,other-pw-form", "Secr3t").lower())
         self.assertNotIn("other-pw-form", tdx.mask_text(".logon h/u,other-pw-form", "Secr3t"))
 
+    def test_mask_text_fragments(self):
+        out = tdx.mask_text("bad logon: 'LongSecret' ... 'Secret9'", "LongSecret99")
+        self.assertNotIn("LongSecret", out)
+        self.assertNotIn("Secret9", out)
+
     def _stream(self, data, tool):
         with tempfile.TemporaryDirectory() as d:
             raw = Path(d) / "x.raw"

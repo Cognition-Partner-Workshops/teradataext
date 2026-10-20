@@ -170,6 +170,9 @@ def mask_text(text: str, secret: str) -> str:
         return text
     variants = {secret, secret.upper(), secret.lower(), secret.replace("'", "''"), secret.replace('"', '""'),
                 repr(secret)[1:-1]}
+    # Fragments (e.g. a password split or cut by a tool message): any run of >= half of it, min 4 chars
+    frag = max(4, (len(secret) + 1) // 2)
+    variants |= {secret[i:j] for i in range(len(secret)) for j in range(i + frag, len(secret) + 1)}
     for v in sorted(variants, key=len, reverse=True):
         if v:
             text = re.sub(re.escape(v), MASK, text, flags=re.I)
@@ -1097,7 +1100,9 @@ def build_rule(col: Column, s: Settings) -> ColumnRule:
 
 def record_sql(rules: list[ColumnRule], s: Settings) -> str:
     joined = f" || {sql_str(s.delimiter)} || ".join(f"({r.expr})" for r in rules)
-    return f"CAST({joined} AS VARCHAR({s.max_row_length}))"
+    # One character of headroom: a record longer than max_row_length arrives as max_row_length + 1
+    # characters and is rejected, so a cut record can never pass as a record that fits exactly.
+    return f"CAST({joined} AS VARCHAR({s.max_row_length + 1}))"
 
 
 def wrap_fields(exprs: list[str], untrimmed: tuple[str, ...] = ()) -> str:
@@ -1161,8 +1166,6 @@ class TableWork:
     cdc_from: str = ""
     cdc_to: str = ""
     no_new_rows: bool = False
-    may_truncate: bool = False
-    measured_max_len: int = 0
     est_rows: int = 0
 
 
@@ -1535,7 +1538,6 @@ class Extractor:
             )
         sentinel = max(len(s.null_sentinel), len(s.empty_sentinel))
         theoretical = sum(max(r.max_len, sentinel) for r in w.rules) + len(w.rules) - 1
-        w.may_truncate = theoretical > s.max_row_length
         if theoretical > s.max_row_length:
             total = " + ".join(f"CHARACTER_LENGTH({r.expr})" for r in w.rules)
             reqs.append(
@@ -1559,7 +1561,6 @@ class Extractor:
         if theoretical > s.max_row_length:
             row = res[pos][0] if res[pos] else []
             v = row[0] if row else None
-            w.measured_max_len = int(Decimal_or_int(v)) if v else 0
             if v and int(Decimal_or_int(v)) > s.max_row_length:
                 raise ExtractError(
                     f"record length {int(Decimal_or_int(v))} exceeds max_row_length {s.max_row_length}"
@@ -1635,10 +1636,9 @@ class Extractor:
                 return
             if (nf := field_count(rec, delim, esc)) != want:
                 error = f"{ch.job_name}: record {seen} has {nf} fields, expected {want}"
-            elif (w.may_truncate and w.measured_max_len < s.max_row_length
-                  and len(rec.decode("utf-8", "replace") if utf8 else rec) >= s.max_row_length):
-                error = (f"{ch.job_name}: record {seen} reached max_row_length {s.max_row_length} "
-                         "(possible truncation); raise max_row_length")
+            elif len(rec.decode("utf-8", "replace") if utf8 else rec) > s.max_row_length:
+                error = (f"{ch.job_name}: record {seen} exceeds max_row_length {s.max_row_length} "
+                         "(changed after the precheck?); raise max_row_length")
             else:
                 fh.write(rec)
                 fh.write(b"\n")

@@ -118,17 +118,35 @@ big_decimal_threshold = 18
 
 ## 4. `config/source_tables.ini`
 
-One section per table; the section name is a free label.
+Two section forms; section names are free labels.
 
 ```ini
-[orders]
+; table list section: database + table list only (braces optional, commas, may wrap
+; onto indented lines). Listed tables: automatic chunking, no filter, full extract.
+[sales]
 database = SALES
-table = ORDERS
+table = {REGION, ORDERS, CUSTOMER}
+
+; one-table section: one table name plus optional settings
+[customer]
+database = SALES
+table = CUSTOMER
 cdc_column = UPDATED_TS     ; optional
 chunk_column =              ; optional override of the automatic chunk column
 where =                     ; optional static filter, ANDed into every export
 enabled = true              ; optional
 ```
+
+- `table` is a list when it contains a comma or a newline, or is wrapped in `{...}`;
+  otherwise it is a single table name (the original one-table form, unchanged).
+- A list section with any key other than `database`/`table`, unbalanced braces, an empty
+  list item, a table in two list sections, or two one-table sections for the same table is
+  a configuration error (exit 2).
+- A table both listed and given a one-table section: `database`/`table` come from the list
+  (the list takes priority), `cdc_column`/`chunk_column`/`where`/`enabled` from the
+  one-table section, and a WARNING is logged.
+- Work order follows the file: list members at the list section's position, other tables at
+  their own section's position.
 
 The table key used everywhere else is `DATABASE.TABLE` upper-cased.
 

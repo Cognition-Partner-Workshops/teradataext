@@ -283,35 +283,139 @@ tdx_check_where() {
 declare -ga T_KEYS=()
 declare -gA T_DB=() T_TABLE=() T_CDC=() T_CHUNK=() T_WHERE=() T_LABEL=()
 
+# table = {A, B, C} (braces optional; commas or newlines) -> TL (array). Returns 1 for a
+# single plain name (one-table section), 2 for a malformed list (TDX_ERR).
+tdx_table_list() {
+    local v=$1 item
+    TL=()
+    if [[ $v != *","* && $v != *$'\n'* && $v != "{"* && $v != *"}" ]]; then return 1; fi
+    if [[ $v == "{"* || $v == *"}" ]]; then
+        [[ $v == "{"*"}" ]] || { TDX_ERR="unbalanced braces in table list"; return 2; }
+        v=${v:1:${#v}-2}
+    fi
+    v=${v//$',\n'/,}
+    v=${v//$'\n,'/,}
+    v=${v//$'\n'/,}
+    local IFS=,
+    for item in $v; do
+        item=$(tdx_strip "$item")
+        [[ -n $item ]] || { TDX_ERR="empty table name in table list"; return 2; }
+        [[ $item == *[{}]* ]] && { TDX_ERR="unexpected brace in table list"; return 2; }
+        TL+=("$item")
+    done
+    ((${#TL[@]})) || { TDX_ERR="empty table list"; return 2; }
+}
+
+# Copy the optional per-table settings of a one-table section into the T_* arrays.
+tdx_source_opts() {
+    local path=$1 label=$2 key=$3 why
+    tdx_get "$label" where ""
+    if [[ -n $REPLY ]] && ! why=$(tdx_check_where "$REPLY"); then
+        tdx_config_error "$path [$label]: where: $why (one boolean condition only)"
+    fi
+    T_WHERE[$key]=$REPLY
+    tdx_get "$label" cdc_column ""
+    T_CDC[$key]=$REPLY
+    tdx_get "$label" chunk_column ""
+    T_CHUNK[$key]=$REPLY
+}
+
+# Two section forms:
+#   list section:       database + table = {A, B, ...}   (no other keys)
+#   one-table section:  database + table = NAME [+ cdc_column, chunk_column, where, enabled]
+# A table in a list may also have a one-table section: database/table come from the list,
+# the other settings from the one-table section (a warning is logged).
 tdx_load_sources() {
-    local path=$1 label db tb key why
+    local path=$1 label db tb key k t rc
     [[ -f $path ]] || tdx_config_error "source tables file not found: $path"
     tdx_ini_read "$path" || tdx_config_error "cannot parse $path: $TDX_INI_ERR"
     T_KEYS=()
+    T_DB=() T_TABLE=() T_CDC=() T_CHUNK=() T_WHERE=() T_LABEL=()
+    local -A list_of=() list_db=() list_tb=() single_of=() seen=()
+    local -A is_list=()
+    # pass 1: validate sections, index list members and one-table sections
     for label in "${INI_SECS[@]}"; do
         [[ $label == DEFAULT ]] && continue
         tdx_get "$label" database ""
         db=$REPLY
+        tdx_ini_has "$label" table && tb=${INI_V["$label${TDX_US}table"]} || tb=""
+        tb=$(tdx_strip "$tb")
+        [[ -n $db && -n $tb ]] || tdx_config_error "$path [$label]: database and table are required"
+        tdx_table_list "$tb"
+        rc=$?
+        if ((rc == 2)); then
+            tdx_config_error "$path [$label]: table: $TDX_ERR"
+        elif ((rc == 0)); then
+            is_list[$label]=1
+            for k in "${!INI_V[@]}"; do
+                [[ ${k%%"$TDX_US"*} == "$label" ]] || continue
+                case ${k#*"$TDX_US"} in
+                    database | table) ;;
+                    *) tdx_config_error "$path [$label]: a table list section takes only database and table, not ${k#*"$TDX_US"} (put it in a one-table section)" ;;
+                esac
+            done
+            for t in "${TL[@]}"; do
+                key="$db.$t"
+                key=${key^^}
+                [[ -n ${list_of[$key]+x} ]] &&
+                    tdx_config_error "$path: table $key listed twice ([${list_of[$key]}] and [$label])"
+                list_of[$key]=$label
+                list_db[$key]=$db
+                list_tb[$key]=$t
+            done
+        fi
+    done
+    for label in "${INI_SECS[@]}"; do
+        [[ $label == DEFAULT || -n ${is_list[$label]+x} ]] && continue
+        tdx_get "$label" database ""
+        key="$REPLY.$(tdx_strip "${INI_V["$label${TDX_US}table"]}")"
+        key=${key^^}
+        [[ -n ${list_of[$key]+x} ]] || continue
+        [[ -n ${single_of[$key]+x} ]] &&
+            tdx_config_error "$path: table $key defined twice ([${single_of[$key]}] and [$label])"
+        single_of[$key]=$label
+    done
+    # pass 2: build the work list in file order
+    for label in "${INI_SECS[@]}"; do
+        [[ $label == DEFAULT ]] && continue
+        if [[ -n ${is_list[$label]+x} ]]; then
+            tdx_table_list "$(tdx_strip "${INI_V["$label${TDX_US}table"]}")"
+            tdx_get "$label" database ""
+            db=$REPLY
+            for t in "${TL[@]}"; do
+                key="$db.$t"
+                key=${key^^}
+                if [[ -n ${single_of[$key]+x} ]]; then
+                    local s=${single_of[$key]}
+                    tdx_warn "$path: $key is listed in [$label] and also defined in [$s]; database/table from [$label], other settings from [$s]"
+                    tdx_get_bool "$s" enabled 1
+                    [[ $REPLY == 1 ]] || continue
+                    tdx_source_opts "$path" "$s" "$key"
+                else
+                    T_WHERE[$key]="" T_CDC[$key]="" T_CHUNK[$key]=""
+                fi
+                T_DB[$key]=${list_db[$key]}
+                T_TABLE[$key]=${list_tb[$key]}
+                T_LABEL[$key]=$label
+                T_KEYS+=("$key")
+            done
+            continue
+        fi
+        tdx_get "$label" database ""
+        db=$REPLY
         tdx_get "$label" table ""
         tb=$REPLY
-        [[ -n $db && -n $tb ]] || tdx_config_error "$path [$label]: database and table are required"
-        tdx_get_bool "$label" enabled 1
-        [[ $REPLY == 1 ]] || continue
         key="$db.$tb"
         key=${key^^}
-        tdx_get "$label" where ""
-        if [[ -n $REPLY ]] && ! why=$(tdx_check_where "$REPLY"); then
-            tdx_config_error "$path [$label]: where: $why (one boolean condition only)"
-        fi
-        T_WHERE[$key]=$REPLY
-        [[ -n ${T_DB[$key]+x} ]] && tdx_config_error "$path: table $key defined twice"
+        [[ -n ${list_of[$key]+x} ]] && continue
+        tdx_get_bool "$label" enabled 1
+        [[ $REPLY == 1 ]] || continue
+        tdx_source_opts "$path" "$label" "$key"
+        [[ -n ${seen[$key]+x} ]] && tdx_config_error "$path: table $key defined twice"
+        seen[$key]=1
         T_DB[$key]=$db
         T_TABLE[$key]=$tb
         T_LABEL[$key]=$label
-        tdx_get "$label" cdc_column ""
-        T_CDC[$key]=$REPLY
-        tdx_get "$label" chunk_column ""
-        T_CHUNK[$key]=$REPLY
         T_KEYS+=("$key")
     done
 }

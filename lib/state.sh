@@ -58,7 +58,7 @@ tdx_state_update() {
 }
 
 tdx_state_get() {
-    REPLY=$(tdx_awk -v mode=get -v sec="$1" -v key="$2" -f "$TDX_LIB/state.awk" "$TDX_STATE_CUR")
+    REPLY=$(TDX_SEC=$1 TDX_KEY=$2 tdx_awk -v mode=get -f "$TDX_LIB/state.awk" "$TDX_STATE_CUR")
     [[ -z $REPLY ]] && REPLY=${3:-}
 }
 
@@ -68,14 +68,14 @@ tdx_state_section() {
     ST_SEC=()
     while IFS= read -r line; do
         [[ -n $line ]] && ST_SEC["${line%%"$TDX_US"*}"]=${line#*"$TDX_US"}
-    done < <(tdx_awk -v mode=section -v sec="$1" -f "$TDX_LIB/state.awk" "$TDX_STATE_CUR")
+    done < <(TDX_SEC=$1 tdx_awk -v mode=section -f "$TDX_LIB/state.awk" "$TDX_STATE_CUR")
 }
 
 tdx_state_sections() { tdx_awk -v mode=sections -f "$TDX_LIB/state.awk" "$TDX_STATE_CUR"; }
 
 # Sorted chunk section names of a table, one per line.
 tdx_state_chunk_sections() {
-    tdx_state_sections | tdx_awk -v pre="$1/part" 'index($0, pre) == 1' | LC_ALL=C sort
+    tdx_state_sections | TDX_PRE="$1/part" tdx_awk 'index($0, ENVIRON["TDX_PRE"]) == 1' | LC_ALL=C sort
 }
 
 tdx_state_table_keys() { tdx_state_sections | tdx_awk '$0 != "_run" && index($0, "/part") == 0'; }

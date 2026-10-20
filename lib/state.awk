@@ -3,7 +3,7 @@
 # argument; one op per line, fields separated by \037) and prints the new file.
 # Ops: set S K V | del S K | rmsec S | rmchunks KEY | reset KEY CLEARWM | ensure S |
 #      pending_all | addchunk KEY N | resetall
-BEGIN { US = "\037"; ns = 0; cur = 0; nops = 0 }
+BEGIN { US = "\037"; ns = 0; cur = 0; nops = 0; sec = ENVIRON["TDX_SEC"]; key = ENVIRON["TDX_KEY"] }
 function strip(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
 function addsec(name) { ns++; sn[ns] = name; sd[ns] = 0; sp[name] = ns; kc[ns] = 0; return ns }
 function secidx(name, create) {

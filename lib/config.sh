@@ -274,16 +274,9 @@ tdx_path_setting() {
 # Prints the reason and returns 1 when the filter is not allowed.
 tdx_check_where() {
     local why
-    why=$(printf '%s\n' "$1" | tdx_awk '
-        { s = s (NR > 1 ? "\n" : "") $0 }
-        END {
-            gsub(/'"'"'([^'"'"']|'"'"''"'"')*'"'"'/, " ", s)
-            if (index(s, "'"'"'")) { print "unbalanced quote"; exit }
-            n = split(";|--|/*|*/", tok, "|")
-            for (i = 1; i <= n; i++) if (index(s, tok[i])) { print "'"'"'" tok[i] "'"'"' is not allowed"; exit }
-        }')
-    [[ -z $why ]] && return 0
-    printf '%s\n' "$why"
+    why=$(printf '%s\n' "$1" | tdx_awk -f "$TDX_LIB/where.awk" 2>/dev/null)
+    [[ $why == OK ]] && return 0
+    printf '%s\n' "${why:-cannot be validated (awk failed)}"
     return 1
 }
 

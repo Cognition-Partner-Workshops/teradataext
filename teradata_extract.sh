@@ -43,7 +43,8 @@ case " $* " in *" -h "* | *" --help "*) tdx_main "$@" ;; esac
 
 ini_value() {
     # ini_value <file> <section> <key>: prints the value, empty if absent
-    LC_ALL=C "${TDX_AWK_CMD[@]}" -v sec="$2" -v key="$3" '
+    TDX_SEC=$2 TDX_KEY=$3 LC_ALL=C "${TDX_AWK_CMD[@]}" '
+        BEGIN { sec = ENVIRON["TDX_SEC"]; key = ENVIRON["TDX_KEY"] }
         /^[ \t]*[#;]/ { next }
         /^[ \t]*\[/ { s = $0; sub(/^[ \t]*\[/, "", s); sub(/\][ \t]*$/, "", s); insec = (s == sec); next }
         insec { k = $0; sub(/=.*/, "", k); gsub(/^[ \t]+|[ \t]+$/, "", k)

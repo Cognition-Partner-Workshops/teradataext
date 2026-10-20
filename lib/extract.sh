@@ -526,7 +526,8 @@ tdx_export_chunk() {
 
 # Helpers kept for tests and log handling --------------------------------------------------------
 tdx_field_count() {
-    printf '%s' "$1" | tdx_awk -v d="$2" -v e="$3" 'BEGIN { RS = "\001" } { s = s $0 } END {
+    printf '%s' "$1" | TDX_D=$2 TDX_E=$3 tdx_awk 'BEGIN { RS = "\001"; d = ENVIRON["TDX_D"]; e = ENVIRON["TDX_E"] }
+        { s = s $0 } END {
         n = 1; L = length(s)
         for (i = 1; i <= L; i++) { c = substr(s, i, 1); if (c == e) i++; else if (c == d) n++ }
         print n }'

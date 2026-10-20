@@ -293,3 +293,80 @@ test_credentials_file_0600() {
     [ "$n" -gt 0 ] || tt_fail "no fake calls"
     for f in "$TDX_TMP/scripts"/*; do grep -qF -- "$TD_PASS_TEST" "$f" || tt_fail "password missing from $f"; done
 }
+
+# ----- source_tables.ini table-list sections -----------------------------------------------------
+it_tables_raw() { printf '%s\n' "$@" >"$TDX_TABLES"; }
+
+test_table_list_section() {
+    tt_env_new
+    it_tables_raw '[tdx]' 'database = TDX_DB' 'table = {MIXED,' '    BIG , CDC}'
+    tt_run_ok
+    assert_match "$TDX_OUT" 'Tables[[:space:]]*:[[:space:]]*done=3 failed=0 pending=0'
+    assert_eq 4 "$(tt_state "$MIXED" rows_exported)"
+    assert_eq 25 "$(tt_state "$BIG" rows_exported)"
+    assert_eq 5 "$(tt_state "$CDC" rows_exported)" "full extract: all fixture rows"
+    assert_empty "$(tt_state "$CDC" watermark)" "listed table without a one-table section: no CDC"
+}
+
+test_table_list_without_braces() {
+    tt_env_new
+    it_tables_raw '[tdx]' 'database = TDX_DB' 'table = MIXED, BIG'
+    tt_run_ok
+    assert_match "$TDX_OUT" 'Tables[[:space:]]*:[[:space:]]*done=2 failed=0 pending=0'
+}
+
+test_table_list_merges_one_table_section() {
+    tt_env_new
+    it_tables_raw '[old_cdc]' 'database = tdx_db' 'table = cdc' 'cdc_column = UPDATED_TS' \
+        "where = NAME <> 'X'" '' '[tdx]' 'database = TDX_DB' 'table = {MIXED, CDC}'
+    tt_run_ok
+    assert_match "$TDX_OUT" 'Tables[[:space:]]*:[[:space:]]*done=2 failed=0 pending=0'
+    assert_eq "$WM1" "$(tt_state "$CDC" watermark)" "cdc_column from the one-table section"
+    assert_contains "$TDX_ERR" "TDX_DB.CDC is listed in [tdx] and also defined in [old_cdc]"
+    grep -qF "listed in [tdx] and also defined in [old_cdc]" "$TDX_ROOT"/logs/*.log ||
+        tt_fail "warning must be in the job log"
+    [ -f "$TDX_ROOT/metadata/tdx_db_cdc.meta.ini" ] || tt_fail "file names use the list's database/table"
+}
+
+test_table_list_one_table_section_disables() {
+    tt_env_new
+    it_tables_raw '[tdx]' 'database = TDX_DB' 'table = {MIXED, BIG}' '' \
+        '[big]' 'database = TDX_DB' 'table = BIG' 'enabled = false'
+    tt_run_ok
+    assert_match "$TDX_OUT" 'Tables[[:space:]]*:[[:space:]]*done=1 failed=0 pending=0'
+    assert_empty "$(it_export_reqs "$BIG")"
+}
+
+test_table_list_config_errors() {
+    tt_env_new
+    local -a bad
+    local case_
+    for case_ in extra_key dup_list unbalanced empty_item trailing_brace trailing_plain dup_single dup_disabled; do
+        case $case_ in
+            extra_key) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED, BIG}' 'cdc_column = UPDATED_TS' ;;
+            dup_list) it_tables_raw '[a]' 'database = TDX_DB' 'table = {MIXED, BIG}' '[b]' 'database = TDX_DB' 'table = {BIG}' ;;
+            unbalanced) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED, BIG' ;;
+            empty_item) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED,,BIG}' ;;
+            trailing_brace) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED,}' ;;
+            trailing_plain) it_tables_raw '[t]' 'database = TDX_DB' 'table = MIXED, BIG,,' ;;
+            dup_disabled) it_tables_raw '[a]' 'database = TDX_DB' 'table = MIXED' 'enabled = false' \
+                '[b]' 'database = TDX_DB' 'table = MIXED' ;;
+            dup_single) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED, BIG}' \
+                '[b1]' 'database = TDX_DB' 'table = BIG' '[b2]' 'database = TDX_DB' 'table = BIG' ;;
+        esac
+        tt_run
+        assert_rc 2 "$TDX_RC" "$case_: $TDX_OUT$TDX_ERR"
+    done
+    assert_eq 0 "$(tt_fake_calls)"
+}
+
+test_table_list_names_are_literal() {
+    tt_env_new
+    : >"$TDX_TMP/MIXED_FILE"; : >"$TDX_TMP/MIXED_OTHER"
+    it_tables_raw '[tdx]' 'database = TDX_DB' 'table = {MIXED*, BIG}'
+    tt_run --dry-run
+    assert_rc 0 "$TDX_RC" "$TDX_OUT$TDX_ERR"
+    assert_not_contains "$TDX_OUT$TDX_ERR" "MIXED_FILE"
+    tt_run --status
+    assert_contains "$TDX_OUT" "TDX_DB.MIXED*"
+}

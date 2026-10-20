@@ -229,7 +229,21 @@ with --config PATH.
 6. SOURCE TABLE DEFINITIONS (config/source_tables.ini)
 ------------------------------------------------------------------------------------------
 
-One section per table; the section name is a free label:
+Two kinds of section; section names are free labels.
+
+Table list section (one per database). Only database and table are allowed:
+
+  [sales]
+  database = SALES
+  table = {REGION, ORDERS, CUSTOMER,
+      ORDER_LINES}
+
+  Braces are optional (table = REGION, ORDERS works too). Separate names with commas; a
+  long list may continue on indented lines. Listed tables are chunked automatically
+  (section 9), have no static filter and are fully extracted every cycle (no CDC), unless
+  they also have a one-table section.
+
+One-table section: one table name plus optional settings:
 
   [orders]
   database = SALES
@@ -239,7 +253,7 @@ One section per table; the section name is a free label:
   where = ORDER_STATUS <> 'X'
   enabled = true
 
-  database, table   Required. Source database and table/view.
+  database, table   Required. Source database and table/view (table: one name).
   cdc_column        Optional. Enables incremental extraction (section 10).
   chunk_column      Optional. Overrides the automatically chosen chunk column (section 9).
   where             Optional. Static SQL filter ANDed into every export of the table
@@ -248,6 +262,16 @@ One section per table; the section name is a free label:
                     rejected. The filter runs with the extraction user's rights, so keep
                     source_tables.ini writable only by the operator.
   enabled           Optional, default true. false = the table is ignored.
+
+A table that is in a list section and also has a one-table section: database and table
+come from the list (the list always takes priority); cdc_column, chunk_column, where and
+enabled come from the one-table section, and a WARNING is logged. enabled = false in the
+one-table section therefore switches the listed table off.
+
+Configuration errors (exit code 2): any key other than database/table in a list section,
+unbalanced braces or an empty name in a list, a table in two list sections, two one-table
+sections for the same table (even if one has enabled = false). Tables are processed in
+file order (list members at their list section's position).
 
 The table key used in process_state.ini, in metadata/audit and on the command line is
 DATABASE.TABLE upper-cased (SALES.ORDERS); --tables matches it case-insensitively. File

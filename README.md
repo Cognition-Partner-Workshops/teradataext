@@ -1,9 +1,14 @@
 # teradataext
 
-A small extraction utility for **Teradata Database 16.20** on UNIX/Linux. It uses
-FastExport (`fexp`) for bulk data and BTEQ (`bteq`) for metadata, small tables and LOB
-tables, and writes pipe-delimited files that load into Amazon Redshift (or similar).
-It needs only Python 3.12 (standard library) and Teradata Tools and Utilities 16.20.
+A small extraction utility for **Teradata Database 16.20** on UNIX/Linux (Linux, AIX,
+Solaris). It uses FastExport (`fexp`) for bulk data and BTEQ (`bteq`) for metadata, small
+tables and LOB tables, and writes pipe-delimited files that load into Amazon Redshift (or
+similar). It is written in bash 4.3+ and POSIX awk and needs only standard UNIX tools
+plus Teradata Tools and Utilities 16.20.
+
+It replaces the former Python 3.12 engine (`src/extract.py`, still available in the git
+history) with the same behaviour, except that per-table archives are now `.tar.gz`
+instead of `.zip`.
 
 - Interface contract (config keys, CLI, file names, state format, type mapping, exit
   codes): [docs/DESIGN.md](docs/DESIGN.md)
@@ -25,7 +30,7 @@ It needs only Python 3.12 (standard library) and Teradata Tools and Utilities 16
 - Never lossy: a table fails rather than truncate LOBs or long records, export
   unsupported types, or export non-LATIN data in an ASCII session.
 - A metadata file per table with Teradata and Redshift types, an append-only audit log,
-  zip with integrity test, and an executive summary at exit.
+  a `.tar.gz` archive per table with integrity test, and an executive summary at exit.
 - Passwords never touch disk. Credentials come from `TD_USER`/`TD_PASS` or a 0600 file,
   and scripts and logs are masked.
 
@@ -33,7 +38,7 @@ It needs only Python 3.12 (standard library) and Teradata Tools and Utilities 16
 
 ```
 teradata_extract.sh               entrypoint
-src/extract.py                    engine (single module, stdlib only)
+lib/                              engine: *.sh (bash 4.3+) and *.awk (POSIX awk)
 config/
   main_config.ini                 main configuration (user-maintained)
   source_tables.ini               tables to extract (user-maintained)
@@ -42,18 +47,33 @@ config/
   credentials.ini.example         credentials file template
   utility_user_guide.txt          operator guide
 docs/DESIGN.md                    interface contract
-tests/                            unittest suite + fake fexp/bteq (tests/fakes)
+tests/                            bash test suite (run_tests.sh) + fake fexp/bteq (tests/fakes)
 metadata/                         <db>_<table>.meta.ini, audit.log        (created at run)
-data/                             <db>_<table>[.partNNN].dat, *.zip       (created at run)
+data/                             <db>_<table>[.partNNN].dat, *.tar.gz    (created at run)
 logs/                             run log, per-job tool output (masked)   (created at run)
-work/                             generated scripts (masked), lock file   (created at run)
+work/                             generated scripts (masked), lock dir    (created at run)
 ```
+
+## Prerequisites
+
+- bash >= 4.3
+- a POSIX awk: gawk, mawk, nawk / onetrue awk, or busybox awk (selected with `TDX_AWK`,
+  default `awk`; mawk or gawk recommended, see [Performance](#performance))
+- `od`, `gzip`, `tar`
+- one SHA-256 tool, the first found of `sha256sum`, `shasum -a 256`,
+  `openssl dgst -sha256`, `digest -a sha256` (Solaris)
+- Teradata Tools and Utilities 16.20: `fexp` and `bteq` on PATH (or `fexp_path` /
+  `bteq_path`)
+
+Supported systems: Linux, AIX, Solaris. The entrypoint checks these at startup and exits
+with code 2 if one is missing. Details: section 2 of the
+[user guide](config/utility_user_guide.txt).
 
 ## Quick start
 
 ```sh
-# 1. prerequisites: python3.12, fexp and bteq (TTU 16.20) on PATH
-python3.12 --version && which fexp bteq
+# 1. prerequisites (see above)
+bash --version && which awk od gzip tar fexp bteq
 
 # 2. configure
 vi config/main_config.ini          # [teradata] host, logtable_database, ...
@@ -62,7 +82,7 @@ vi config/source_tables.ini        # tables to extract
 # 3. credentials (preferred: environment variables)
 export TD_USER=etl_user
 read -s TD_PASS && export TD_PASS
-# export TDX_PYTHON=/path/to/python3.12   # if python3.12 is not the default
+# export TDX_AWK=/usr/bin/mawk            # optional: faster awk (see Performance)
 
 # 4. validate without connecting, then run
 ./teradata_extract.sh --dry-run
@@ -109,14 +129,30 @@ Exit codes: `0` all queued tables done, `1` at least one table failed, `2` confi
 credential / tool / lock error (nothing extracted), `130` interrupted (state saved,
 resumable).
 
+Environment variables: `TD_USER` / `TD_PASS` (credentials), `TDX_AWK` (awk binary,
+default `awk`), `TDX_FEXP` / `TDX_BTEQ` (override `fexp_path` / `bteq_path`).
+
+Only one instance runs at a time per work directory. The lock is the directory
+`work/.process_state.lock/`, which holds the pid of the running instance. A lock left by a
+killed run is removed automatically when that pid no longer exists. To clear it by hand,
+check that no instance is running (`ps -p $(cat work/.process_state.lock/pid)`), then
+`rm -rf work/.process_state.lock`.
+
 ## Output
 
 For each table:
 
 - `data/<db>_<table>[.partNNN].dat`: pipe-delimited records terminated by LF, ASCII or UTF-8
   (`session_charset`). Large tables produce one file per chunk (`.part001`, ...).
-- `data/<db>_<table>_<cycle_id>.zip`: the table's files, zipped and integrity-tested. The
-  raw `.dat` files are deleted afterwards unless `keep_raw_after_zip = true`.
+- `data/<db>_<table>_<cycle_id>.tar.gz`: the table's files, archived with
+  `tar cf - ... | gzip -c` and integrity-tested (`gzip -t`, and the member list from
+  `gzip -dc | tar tf -` must equal the expected `.dat` names) before the rename to
+  `.tar.gz`; its SHA-256 is recorded in the state file. The raw `.dat` files are deleted
+  afterwards unless `keep_raw_after_zip = true`. The config keys `zip_on_complete` /
+  `keep_raw_after_zip` and the state keys `zip_file` / `zip_sha256` keep their names but
+  refer to the `.tar.gz`. The summary line reads `Files written : N (.dat) / M (.tar.gz)`.
+  Unpack portably (also with AIX/Solaris tar):
+  `gzip -dc sales_orders_<cycle_id>.tar.gz | tar xf -`.
 - `metadata/<db>_<table>.meta.ini`: table and column metadata, including the output
   encoding and Redshift type of each column.
 - `metadata/audit.log`: one line per table per run.
@@ -160,18 +196,40 @@ the VARCHAR-staging approach described in section 20 of the
 
 The full table is in [docs/DESIGN.md](docs/DESIGN.md) section 8.
 
+## Performance
+
+Raw fexp/bteq export files are decoded into `.dat` files with `od` + awk
+(`lib/rawdecode.awk`). Decoding runs after the export of each job (table or chunk), per
+chunk, and each job decodes independently. Measured decoder throughput for a 48 MB /
+200,000-record raw file:
+
+| awk | throughput |
+|---|---|
+| mawk | ~4 MB/s |
+| gawk | ~3.3 MB/s |
+| onetrue awk (typical AIX/Solaris nawk-class) | ~1.2 MB/s |
+| busybox awk | ~0.6 MB/s |
+| former engine, for comparison | ~230 MB/s |
+
+Use mawk or gawk where available (`export TDX_AWK=/usr/bin/mawk`), and for big tables run
+more parallel jobs (`parallel`, smaller `chunk_rows`) so that chunks decode in parallel.
+See section 13 of the [user guide](config/utility_user_guide.txt).
+
 ## Testing
 
 ```sh
-python3.12 -m unittest discover -s tests -v
+tests/run_tests.sh               # with the default awk
+tests/run_tests.sh --awk mawk    # with a given awk (gawk, mawk, original-awk, busybox awk)
 ```
 
-The tests use only the standard library and do not need a Teradata system. `tests/fakes/fexp`
-and `tests/fakes/bteq` are executable Python stand-ins. They are selected with the
-`TDX_FEXP` / `TDX_BTEQ` environment variables and driven by a JSON fixture named in
-`TDX_FAKE_FIXTURE`. They read the generated script from stdin, answer each marked
-request, write raw export files in the real tool layouts, and can simulate failures such
-as `Failure 2633`.
+The tests are plain bash and do not need a Teradata system. `tests/fakes/fexp` and
+`tests/fakes/bteq` are bash + awk stand-ins selected with the `TDX_FEXP` / `TDX_BTEQ`
+environment variables and driven by plain-text fixtures (see
+[tests/fakes/README.md](tests/fakes/README.md)). They read the generated script from
+stdin, answer each marked request, write raw export files in the real tool layouts, and
+can simulate failures such as `Failure 2633`. `tests/golden/<scenario>/` holds normalized
+outputs captured from the former engine; the golden tests rerun the same scenarios and
+compare the outputs byte for byte after the same normalization.
 
 ## Limitations
 
@@ -185,3 +243,9 @@ as `Failure 2633`.
 - The Redshift loading recommendations must be validated on the target cluster.
 - CDC captures inserts and updates through the CDC column. It does not capture deletes.
 - Only the `pipe-delimited` file format is supported.
+- A NUL (0x00) byte inside a record fails the job: portable awks cannot write NUL bytes,
+  and the utility never drops data silently.
+- Raw decoding is much slower than in the former engine (see [Performance](#performance)).
+- Range chunks on DECIMAL keys with a scale or more than 18 digits: the boundary literals
+  may differ textually from the former engine; every value (NULL and out-of-range
+  included) is still covered.

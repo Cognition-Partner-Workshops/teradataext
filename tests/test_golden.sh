@@ -24,7 +24,9 @@ gd_norm() {
         gd_norm_extra
 }
 # applied to both sides: a previous run's id is only half-normalized by the generator
-gd_norm_extra() { sed -E 's/<CYCLE_ID>-[0-9]+/<RUN_ID>/g'; }
+GD_REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# ... and the checkout location of the repository (dry-run prints the fake tool paths)
+gd_norm_extra() { sed -E -e 's/<CYCLE_ID>-[0-9]+/<RUN_ID>/g' -e "s/$(gd_sed_lit "$GD_REPO")/<REPO>/g"; }
 
 # gd_snap NAME: capture the current run (TDX_RC / run.out) like the generator's snap(), then
 # compare with tests/golden/NAME. Differences are collected in GD_FAILS.

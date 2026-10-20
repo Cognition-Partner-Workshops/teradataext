@@ -1,5 +1,5 @@
 Credentials : environment (TD_USER/TD_PASS) (user tdx_test_user)
-Tools       : fexp=/home/ubuntu/repos/teradataext/tests/fakes/fexp bteq=/home/ubuntu/repos/teradataext/tests/fakes/bteq
+Tools       : fexp=<REPO>/tests/fakes/fexp bteq=<REPO>/tests/fakes/bteq
 Parallel    : 1 job(s), max_sessions=4
 Cycle id    : <CYCLE>
 Work queue  : 3 table(s), 0 already done

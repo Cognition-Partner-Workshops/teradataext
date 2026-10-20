@@ -91,7 +91,7 @@ tdx_wm_text() {
     local key=$1 status=$2 to
     REPLY=""
     [[ -n ${T_CDC[$key]} ]] || return 0
-    if [[ $status == done ]]; then to=$WI_cdc_to; else to=$WI_cdc_from; fi
+    if [[ $status == "done" ]]; then to=$WI_cdc_to; else to=$WI_cdc_from; fi
     REPLY="${WI_cdc_from:--}->${to:--}"
 }
 
@@ -116,7 +116,7 @@ tdx_finalize() {
         local done_n=0
         for sec in "${secs[@]}"; do
             tdx_state_get "$sec" status
-            [[ $REPLY == done ]] && done_n=$((done_n + 1))
+            [[ $REPLY == "done" ]] && done_n=$((done_n + 1))
         done
         tdx_wm_text "$key" failed
         tdx_audit "$key" failed 0 0 "$done_n/${#secs[@]}" "${st[method]:-}" "$elapsed" "$REPLY" "$err"
@@ -181,11 +181,11 @@ tdx_finalize() {
     upd+=(status=done finished_at="$(tdx_iso_now)" elapsed_seconds="$(tdx_fmt_ds "$elapsed")" -last_error)
     tdx_state_update "$key" "${upd[@]}"
     TDX_ROWS_TOTAL=$((TDX_ROWS_TOTAL + rows))
-    RESULTS[$key]=done
-    tdx_wm_text "$key" done
+    RESULTS[$key]="done"
+    tdx_wm_text "$key" "done"
     local msg=ok
     [[ $WI_no_new_rows == 1 ]] && msg="no new CDC rows"
-    tdx_audit "$key" done "$rows" "${#files[@]}" "${#secs[@]}/${#secs[@]}" "$method" "$elapsed" "$REPLY" "$msg"
+    tdx_audit "$key" "done" "$rows" "${#files[@]}" "${#secs[@]}/${#secs[@]}" "$method" "$elapsed" "$REPLY" "$msg"
     tdx_info "$key done: $rows rows, ${#files[@]} file(s)"
 }
 
@@ -221,7 +221,7 @@ tdx_print_status() {
 tdx_summary() {
     local queued=$1 skipped=$2 started=$3 done_n=0 failed=0 k
     for k in "${!RESULTS[@]}"; do
-        [[ ${RESULTS[$k]} == done ]] && done_n=$((done_n + 1))
+        [[ ${RESULTS[$k]} == "done" ]] && done_n=$((done_n + 1))
         [[ ${RESULTS[$k]} == failed ]] && failed=$((failed + 1))
     done
     printf '%s TERADATA EXTRACT SUMMARY %s\n' "====================" "===================="

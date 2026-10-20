@@ -805,7 +805,10 @@ class ToolRunner:
         return any(p in low for p in self.s.session_limit_patterns)
 
     def run(self, tool: str, name: str, script: str, sessions: int = 1) -> str:
-        """Run fexp/bteq with the script on stdin; returns the (masked) output text."""
+        """Run fexp/bteq with the script on stdin.
+
+        Returns the unmasked output for in-memory parsing only (row counts); only masked text is persisted.
+        """
         if self.stopping.is_set():
             raise KeyboardInterrupt
         exe = self.s.fexp_path if tool == "fexp" else self.s.bteq_path
@@ -844,7 +847,8 @@ class ToolRunner:
             finally:
                 with self.procs_lock:
                     self.procs.discard(proc)
-        output = mask_text(out_b.decode("utf-8", errors="replace"), pw)
+        raw_out = out_b.decode("utf-8", errors="replace")
+        output = mask_text(raw_out, pw)
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(
                 f"===== {iso(utcnow())} {tool} sessions={sessions} rc={rc} "
@@ -854,7 +858,7 @@ class ToolRunner:
             raise KeyboardInterrupt
         if rc is None:
             raise ToolError(f"{tool} timed out after {timeout:.0f}s ({log_path.name})")
-        failed = rc != 0 or (tool == "bteq" and re.search(r"\*\*\* (?:Failure|Error) \d+", output))
+        failed = rc != 0 or (tool == "bteq" and re.search(r"\*\*\* (?:Failure|Error) \d+", raw_out))
         if failed:
             first = next(
                 (ln.strip() for ln in output.splitlines() if re.search(r"Failure|Error", ln)),
@@ -862,9 +866,9 @@ class ToolRunner:
             )
             raise ToolError(
                 f"{tool} failed (rc={rc}): {first} (see {log_path.name})",
-                session_limit=self.is_session_limit(output),
+                session_limit=self.is_session_limit(raw_out),
             )
-        return output
+        return raw_out
 
     def kill_all(self) -> None:
         self.stopping.set()
@@ -1158,6 +1162,7 @@ class TableWork:
     cdc_to: str = ""
     no_new_rows: bool = False
     may_truncate: bool = False
+    measured_max_len: int = 0
     est_rows: int = 0
 
 
@@ -1554,6 +1559,7 @@ class Extractor:
         if theoretical > s.max_row_length:
             row = res[pos][0] if res[pos] else []
             v = row[0] if row else None
+            w.measured_max_len = int(Decimal_or_int(v)) if v else 0
             if v and int(Decimal_or_int(v)) > s.max_row_length:
                 raise ExtractError(
                     f"record length {int(Decimal_or_int(v))} exceeds max_row_length {s.max_row_length}"
@@ -1629,7 +1635,8 @@ class Extractor:
                 return
             if (nf := field_count(rec, delim, esc)) != want:
                 error = f"{ch.job_name}: record {seen} has {nf} fields, expected {want}"
-            elif w.may_truncate and len(rec.decode("utf-8", "replace") if utf8 else rec) >= s.max_row_length:
+            elif (w.may_truncate and w.measured_max_len < s.max_row_length
+                  and len(rec.decode("utf-8", "replace") if utf8 else rec) >= s.max_row_length):
                 error = (f"{ch.job_name}: record {seen} reached max_row_length {s.max_row_length} "
                          "(possible truncation); raise max_row_length")
             else:

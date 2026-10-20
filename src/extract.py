@@ -160,8 +160,20 @@ def parse_marker(sql: str) -> dict[str, str]:
     }
 
 
+_LOGON_RE = re.compile(r"(?im)(\.logon\s+[^,\s;]*)[^\n]*")
+
+
 def mask_text(text: str, secret: str) -> str:
-    return text.replace(secret, MASK) if secret else text
+    """Mask the password (and common transformed forms) plus anything after the user on .LOGON lines."""
+    text = _LOGON_RE.sub(lambda m: m.group(1) + "," + MASK, text)
+    if not secret:
+        return text
+    variants = {secret, secret.upper(), secret.lower(), secret.replace("'", "''"), secret.replace('"', '""'),
+                repr(secret)[1:-1]}
+    for v in sorted(variants, key=len, reverse=True):
+        if v:
+            text = re.sub(re.escape(v), MASK, text, flags=re.I)
+    return text
 
 
 def count_records(data: bytes, escape: int = 0x5C) -> int:
@@ -227,11 +239,50 @@ def parse_raw_export(data: bytes, tool: str = "bteq") -> tuple[list[bytes], str]
     raise ExtractError("raw export file does not match any known record layout")
 
 
-_ESCAPED_RE = re.compile(rb"\\.", re.S)
+def field_count(record: bytes, delimiter: bytes, escape: bytes = b"\\") -> int:
+    return re.sub(re.escape(escape) + b".", b"", record, flags=re.S).count(delimiter) + 1
 
 
-def field_count(record: bytes, delimiter: bytes) -> int:
-    return _ESCAPED_RE.sub(b"", record).count(delimiter) + 1
+def _stream_layout(fh, rec_prefix: bool, eor: bool, sink) -> int | None:
+    """Read records of one layout from fh, handing each payload to sink; None if the layout does not fit."""
+    n = 0
+    while True:
+        head = fh.read(4 if rec_prefix else 2)
+        if not head:
+            return n
+        if len(head) < (4 if rec_prefix else 2):
+            return None
+        vlen = int.from_bytes(head[-2:], "little")
+        if rec_prefix and int.from_bytes(head[:2], "little") != vlen + 2:
+            return None
+        payload = fh.read(vlen)
+        if len(payload) < vlen:
+            return None
+        if eor and fh.read(1) != b"\n":
+            return None
+        sink(payload)
+        n += 1
+
+
+def stream_raw_export(raw: Path, out, tool: str, sink, reset) -> tuple[int, str]:
+    """Streaming parse_raw_export: memory stays bounded by one record.
+
+    out is the (binary, seekable) file the sink writes to; it is truncated and reset() is called before
+    each layout attempt.
+    """
+    if not raw.exists() or raw.stat().st_size == 0:
+        return 0, "empty"
+    preferred = (True, True) if tool == "bteq" else (False, True)
+    with raw.open("rb", buffering=1 << 20) as fh:
+        for rec_prefix, eor in (preferred, *(x for x in LAYOUTS if x != preferred)):
+            fh.seek(0)
+            out.seek(0)
+            out.truncate()
+            reset()
+            n = _stream_layout(fh, rec_prefix, eor, sink)
+            if n is not None:
+                return n, ("reclen+" if rec_prefix else "") + "varchar" + ("+eor" if eor else "")
+    raise ExtractError("raw export file does not match any known record layout")
 
 
 def sha256_file(path: Path) -> str:
@@ -503,6 +554,17 @@ class SourceTable:
         return f"{sql_ident(self.database)}.{sql_ident(self.table)}"
 
 
+def check_where(where: str) -> str | None:
+    """Reject statement separators and comments outside string literals in a [table] where filter."""
+    outside = re.sub(r"'(?:[^']|'')*'", " ", where)
+    if "'" in outside:
+        return "unbalanced quote"
+    for tok in (";", "--", "/*", "*/"):
+        if tok in outside:
+            return f"'{tok}' is not allowed"
+    return None
+
+
 def load_source_tables(path: Path) -> list[SourceTable]:
     if not path.is_file():
         raise ConfigError(f"source tables file not found: {path}")
@@ -529,6 +591,8 @@ def load_source_tables(path: Path) -> list[SourceTable]:
             chunk_column=sec.get("chunk_column", "").strip(),
             where=sec.get("where", "").strip(),
         )
+        if t.where and (why := check_where(t.where)):
+            raise ConfigError(f"{path} [{label}]: where: {why} (one boolean condition only)")
         if t.key in seen:
             raise ConfigError(f"{path}: table {t.key} defined twice")
         seen.add(t.key)
@@ -1032,10 +1096,15 @@ def record_sql(rules: list[ColumnRule], s: Settings) -> str:
     return f"CAST({joined} AS VARCHAR({s.max_row_length}))"
 
 
-def wrap_fields(exprs: list[str]) -> str:
-    """Single-VARCHAR result row for internal queries (NULL -> \\N, | escaped)."""
+def wrap_fields(exprs: list[str], untrimmed: tuple[str, ...] = ()) -> str:
+    """Single-VARCHAR result row for internal queries (NULL -> \\N, | escaped).
+
+    Expressions in untrimmed (identifiers) keep leading/trailing spaces.
+    """
     parts = [
-        f"COALESCE(OREPLACE(OREPLACE(TRIM(CAST({e} AS VARCHAR(256))), '\\', '\\\\'), '|', '\\|'), '\\N')"
+        f"COALESCE(OREPLACE(OREPLACE("
+        + (f"CAST({e} AS VARCHAR(256))" if e in untrimmed else f"TRIM(CAST({e} AS VARCHAR(256)))")
+        + "), '\\', '\\\\'), '|', '\\|'), '\\N')"
         for e in exprs
     ]
     return " || '|' || ".join(parts)
@@ -1088,6 +1157,7 @@ class TableWork:
     cdc_from: str = ""
     cdc_to: str = ""
     no_new_rows: bool = False
+    may_truncate: bool = False
     est_rows: int = 0
 
 
@@ -1109,6 +1179,16 @@ def cdc_literal(col: Column, value: str) -> str:
     if not NUMERIC_RE.match(value):
         raise ExtractError(f"invalid numeric watermark {value!r} for {col.name}")
     return value
+
+
+def cdc_window_pred(col: Column, lo: str, hi: str) -> str:
+    """CDC predicate; the initial (no watermark) extract also takes rows whose CDC value is NULL."""
+    if not hi:
+        return ""
+    upper = f"{cdc_expr(col)} <= {cdc_literal(col, hi)}"
+    if not lo:
+        return f"{upper} OR {sql_ident(col.name)} IS NULL"
+    return f"{cdc_expr(col)} > {cdc_literal(col, lo)} AND {upper}"
 
 
 def cdc_max_sql(col: Column) -> str:
@@ -1253,10 +1333,10 @@ class Extractor:
             marker("columns", t) + " SELECT " + wrap_fields([
                 "ColumnId", "ColumnName", "ColumnType", "ColumnLength",
                 "DecimalTotalDigits", "DecimalFractionalDigits", "Nullable", "CharType",
-            ]) + f" FROM DBC.ColumnsV WHERE DatabaseName = {sql_str(t.database)}"
+            ], untrimmed=("ColumnName",)) + f" FROM DBC.ColumnsV WHERE DatabaseName = {sql_str(t.database)}"
             f" AND TableName = {sql_str(t.table)} ORDER BY ColumnId",
             marker("index", t) + " SELECT " + wrap_fields(
-                ["IndexType", "UniqueFlag", "ColumnPosition", "ColumnName"]
+                ["IndexType", "UniqueFlag", "ColumnPosition", "ColumnName"], untrimmed=("ColumnName",)
             ) + f" FROM DBC.IndicesV WHERE DatabaseName = {sql_str(t.database)}"
             f" AND TableName = {sql_str(t.table)} ORDER BY IndexNumber, ColumnPosition",
         ]
@@ -1276,7 +1356,7 @@ class Extractor:
             try:
                 cols.append(Column(
                     position=len(cols) + 1,
-                    name=(r[1] or "").strip(),
+                    name=r[1] or "",
                     type_code=(r[2] or "").strip().upper(),
                     length=int(r[3] or 0),
                     total_digits=int(r[4] or 0),
@@ -1289,8 +1369,8 @@ class Extractor:
         w.rules = [build_rule(c, s) for c in cols]
         w.lob = any(r.lob for r in w.rules)
         by_name = {c.name.upper(): c for c in cols}
-        pi = [r[3].strip() for r in idx_rows if r and len(r) > 3 and r[0] in {"P", "Q"} and r[3]]
-        pk = [r[3].strip() for r in idx_rows if r and len(r) > 3 and r[0] == "K" and r[3]]
+        pi = [r[3] for r in idx_rows if r and len(r) > 3 and r[0] in {"P", "Q"} and r[3]]
+        pk = [r[3] for r in idx_rows if r and len(r) > 3 and r[0] == "K" and r[3]]
         meta_path = s.metadata_dir / f"{t.base}.meta.ini"
 
         unsupported = [r for r in w.rules if r.output_encoding == "unsupported"]
@@ -1320,17 +1400,22 @@ class Extractor:
                 )
                 rows = self.runner.query(f"{t.base}.cdc", [sql])[0]
                 w.cdc_to = (rows[0][0] or "") if rows and rows[0] else ""
-                if not w.cdc_to:
+                if not w.cdc_to and not w.cdc_from:
+                    LOG.warning("%s: %s has no non-NULL values; extracting the full table without a watermark",
+                                key, t.cdc_column)
+                elif not w.cdc_to:
                     w.no_new_rows = True
                     w.est_rows = 0
                     write_meta(meta_path, w, s, pi, "none", "", "cdc")
                     self.state.update(key, method="none", estimated_rows=0, row_estimate_source="cdc",
                                       chunk_strategy="none", chunk_count=0, chunks_done="")
                     return
-                self.state.update(key, pending_watermark=w.cdc_to)
-            cdc_pred = " AND ".join(
-                p for p in (lower, f"{cdc_expr(cdc_col)} <= {cdc_literal(cdc_col, w.cdc_to)}") if p
-            )
+                else:
+                    self.state.update(key, pending_watermark=w.cdc_to)
+            if cdc_col.nullable:
+                LOG.info("%s: rows with NULL %s are taken only by the initial (no watermark) extract",
+                         key, t.cdc_column)
+            cdc_pred = cdc_window_pred(cdc_col, w.cdc_from, w.cdc_to)
         base_preds = (cdc_pred, t.where)
         cdc_marks = {"cdc_gt": w.cdc_from, "cdc_le": w.cdc_to}
 
@@ -1340,10 +1425,14 @@ class Extractor:
             n = len(existing)
             done = {int(x) for x in prev.get("chunks_done", "").split(",") if x}
             w.est_rows = int(prev.get("estimated_rows", "0") or 0)
+            zipped = prev.get("zip_file") == f"{t.base}_{self.cycle_id}.zip"
             for i, sec in enumerate(existing, start=1):
                 cs = self.state.section(sec)
                 w.chunks.append(Chunk(i, n, cs.get("where", ""), cs["file"], int(cs.get("est_rows", "0") or 0)))
                 if i not in done or cs.get("status") != "done":
+                    w.pending.add(i)
+                elif not zipped and not (s.output_dir / cs["file"]).exists():
+                    LOG.warning("%s: %s is missing, re-exporting chunk %d", key, cs["file"], i)
                     w.pending.add(i)
             strategy, chunk_col_name, est_source = (
                 prev.get("chunk_strategy", "none"), prev.get("chunk_column", ""), prev.get("row_estimate_source", ""))
@@ -1439,7 +1528,9 @@ class Extractor:
                 marker("lobcheck", t, cols=",".join(r.col.name for r in lob_rules), **cdc_marks)
                 + " SELECT " + wrap_fields(exprs) + f" FROM {t.fqn}" + where_sql(*base_preds)
             )
-        theoretical = sum(r.max_len for r in w.rules) + len(w.rules) - 1
+        sentinel = max(len(s.null_sentinel), len(s.empty_sentinel))
+        theoretical = sum(max(r.max_len, sentinel) for r in w.rules) + len(w.rules) - 1
+        w.may_truncate = theoretical > s.max_row_length
         if theoretical > s.max_row_length:
             total = " + ".join(f"CHARACTER_LENGTH({r.expr})" for r in w.rules)
             reqs.append(
@@ -1520,43 +1611,63 @@ class Extractor:
                     self.state.update(sec, method=method, sessions=1)
                     continue
                 raise
-        data = raw.read_bytes() if raw.exists() else b""
-        records, layout = parse_raw_export(data, method)
         want = len(w.rules)
-        delim = s.delimiter.encode()
-        for i, rec in enumerate(records, start=1):
-            if field_count(rec, delim) != want:
-                raise ExtractError(f"{ch.job_name}: record {i} has {field_count(rec, delim)} fields, expected {want}")
-        reported = self._reported_rows(method, out)
-        if reported is not None and reported != len(records):
-            raise ExtractError(f"{ch.job_name}: {method} reported {reported} rows but {len(records)} were parsed")
+        delim, esc = s.delimiter.encode(), s.escape_char.encode()
+        utf8 = s.session_charset == "UTF8"
         tmp = dat.with_name(dat.name + ".tmp")
-        with tmp.open("wb") as fh:
-            for rec in records:
+        seen = 0
+        error = ""
+
+        def reset() -> None:
+            nonlocal seen, error
+            seen, error = 0, ""
+
+        def sink(rec: bytes) -> None:
+            nonlocal seen, error
+            seen += 1
+            if error:
+                return
+            if (nf := field_count(rec, delim, esc)) != want:
+                error = f"{ch.job_name}: record {seen} has {nf} fields, expected {want}"
+            elif w.may_truncate and len(rec.decode("utf-8", "replace") if utf8 else rec) >= s.max_row_length:
+                error = (f"{ch.job_name}: record {seen} reached max_row_length {s.max_row_length} "
+                         "(possible truncation); raise max_row_length")
+            else:
                 fh.write(rec)
                 fh.write(b"\n")
-            fh.flush()
-            os.fsync(fh.fileno())
+
+        try:
+            with tmp.open("w+b", buffering=1 << 20) as fh:
+                n_rows, layout = stream_raw_export(raw, fh, method, sink, reset)
+                if error:
+                    raise ExtractError(error)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        reported = self._reported_rows(method, out)
+        if reported is not None and reported != n_rows:
+            tmp.unlink(missing_ok=True)
+            raise ExtractError(f"{ch.job_name}: {method} reported {reported} rows but {n_rows} were parsed")
         os.replace(tmp, dat)
         raw.unlink(missing_ok=True)
         w.methods.add(method)
         self.state.update(
-            sec, status="done", rows=len(records), bytes=dat.stat().st_size, sha256=sha256_file(dat),
+            sec, status="done", rows=n_rows, bytes=dat.stat().st_size, sha256=sha256_file(dat),
             method=method, layout=layout, finished_at=iso(utcnow()),
         )
         with self.state.lock:
             done = {int(x) for x in self.state.get(t.key, "chunks_done").split(",") if x}
             done.add(ch.index)
             self.state.update(t.key, chunks_done=",".join(str(x) for x in sorted(done)))
-        LOG.info("%s: %d rows via %s", ch.job_name, len(records), method)
+        LOG.info("%s: %d rows via %s", ch.job_name, n_rows, method)
 
     def _cdc_pred(self, w: TableWork) -> str:
         if not w.src.cdc_column or not w.cdc_to:
             return ""
         col = next(r.col for r in w.rules if r.col.name.upper() == w.src.cdc_column.upper())
-        lower = f"{cdc_expr(col)} > {cdc_literal(col, w.cdc_from)}" if w.cdc_from else ""
-        upper = f"{cdc_expr(col)} <= {cdc_literal(col, w.cdc_to)}"
-        return " AND ".join(p for p in (lower, upper) if p)
+        return cdc_window_pred(col, w.cdc_from, w.cdc_to)
 
     @staticmethod
     def _reported_rows(method: str, out: str) -> int | None:
@@ -1604,16 +1715,21 @@ class Extractor:
             "method": method,
         }
         if files and s.zip_on_complete:
-            missing = [f.name for f in files if not f.exists()]
-            if missing:
-                raise ExtractError(f"data files missing before zip: {', '.join(missing)}")
             zip_path = s.output_dir / f"{t.base}_{self.cycle_id}.zip"
+            if self._zip_still_valid(st, zip_path, files):
+                zip_sha = st["zip_sha256"]
+            else:
+                missing = [f.name for f in files if not f.exists()]
+                if missing:
+                    raise ExtractError(f"data files missing before zip: {', '.join(missing)}")
+                zip_sha = zip_table(files, zip_path)
+                self.state.update(key, zip_file=zip_path.name, zip_sha256=zip_sha)
             upd["zip_file"] = zip_path.name
-            upd["zip_sha256"] = zip_table(files, zip_path)
+            upd["zip_sha256"] = zip_sha
             self.zip_files += 1
             if not s.keep_raw_after_zip:
                 for f in files:
-                    f.unlink()
+                    f.unlink(missing_ok=True)
         self.dat_files += len(files)
         if t.cdc_column:
             if w.cdc_to:
@@ -1626,6 +1742,19 @@ class Extractor:
         self._audit(key, "done", rows, len(files), f"{len(chunk_secs)}/{len(chunk_secs)}", method, elapsed, w,
                     "no new CDC rows" if w.no_new_rows else "ok")
         LOG.info("%s done: %d rows, %d file(s)", key, rows, len(files))
+
+    @staticmethod
+    def _zip_still_valid(st: dict[str, str], zip_path: Path, files: list[Path]) -> bool:
+        """True when a previous attempt already wrote and recorded this cycle's verified archive."""
+        if st.get("zip_file") != zip_path.name or not st.get("zip_sha256") or not zip_path.exists():
+            return False
+        if sha256_file(zip_path) != st["zip_sha256"]:
+            return False
+        with zipfile.ZipFile(zip_path) as zf:
+            if zf.testzip() is not None:
+                return False
+            names = set(zf.namelist())
+        return all(f.name in names for f in files)
 
     def _audit(self, key: str, status: str, rows: int, files: int, chunks: str, method: str,
                elapsed: float, w: TableWork | None, msg: str) -> None:
@@ -1719,6 +1848,16 @@ def Decimal_or_int(v: str) -> int:
 
 
 # ------------------------------------------------------------------------- CLI
+
+
+def new_cycle_id(s: Settings, state: StateStore, now: dt.datetime) -> str:
+    """Timestamp cycle id, suffixed when that id was already used (no archive is ever overwritten)."""
+    base = now.strftime("%Y%m%dT%H%M%SZ")
+    cand, n = base, 1
+    while cand == state.get("_run", "cycle_id") or any(s.output_dir.glob(f"*_{cand}.zip")):
+        n += 1
+        cand = f"{base}-{n}"
+    return cand
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1822,7 +1961,7 @@ def main(argv: list[str] | None = None) -> int:
             for key in state.table_keys():
                 state.reset_table(key)
                 state.update(key, save=False, pending_watermark=None)
-            state.update("_run", save=False, cycle_id=now.strftime("%Y%m%dT%H%M%SZ"))
+            state.update("_run", save=False, cycle_id=new_cycle_id(s, state, now))
             changed = True
         for k in args.reset_table:
             state.reset_table(k.upper())
@@ -1831,7 +1970,7 @@ def main(argv: list[str] | None = None) -> int:
             state.reset_table(k.upper(), clear_watermark=True)
             changed = True
         if not state.get("_run", "cycle_id"):
-            state.update("_run", save=False, cycle_id=now.strftime("%Y%m%dT%H%M%SZ"))
+            state.update("_run", save=False, cycle_id=new_cycle_id(s, state, now))
             changed = True
         if changed and not args.status:
             state.save()

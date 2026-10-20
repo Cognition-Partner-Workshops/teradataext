@@ -207,7 +207,10 @@ One section per table; the section name is a free label:
   cdc_column        Optional. Enables incremental extraction (section 10).
   chunk_column      Optional. Overrides the automatically chosen chunk column (section 9).
   where             Optional. Static SQL filter ANDed into every export of the table
-                    (every chunk). Write it as plain Teradata SQL on one line.
+                    (every chunk). Write it as plain Teradata SQL on one line: a single
+                    boolean condition. ';', '--', '/*' and '*/' outside string literals are
+                    rejected. The filter runs with the extraction user's rights, so keep
+                    source_tables.ini writable only by the operator.
   enabled           Optional, default true. false = the table is ignored.
 
 The table key used in process_state.ini, in metadata/audit and on the command line is
@@ -281,7 +284,8 @@ Resume behaviour (simply rerun the same command):
   * Exit code 130 (interrupted) and exit code 1 (some table failed) are both resumable.
 
 Restart behaviour:
-  * --new-cycle starts a new cycle (new cycle_id): every table back to pending, chunk
+  * --new-cycle starts a new cycle (new cycle_id, UTC timestamp; suffixed -2, -3, ... if
+    that id was already used, so no archive is overwritten): every table back to pending, chunk
     lists cleared. CDC watermarks are kept, so CDC tables export only rows changed since
     the last committed watermark; non-CDC tables are exported in full again.
   * --reset-table DB.T re-extracts one table from scratch in the current cycle (chunks
@@ -322,7 +326,9 @@ For a table with cdc_column:
   1. Before exporting, the upper bound is captured first: MAX(cdc_column) of rows above
      the last committed watermark. It is stored as pending_watermark.
   2. The export selects  cdc_column > watermark  AND  cdc_column <= pending_watermark
-     (only the upper bound when there is no watermark yet: first run = full extract).
+     (only the upper bound when there is no watermark yet: first run = full extract,
+     including rows whose cdc_column is NULL; if the column has no non-NULL value at all
+     the table is extracted in full and no watermark is stored).
      Rows committed in Teradata while the export runs and later than the upper bound are
      picked up by the next cycle, not lost.
   3. The watermark is committed (watermark = pending_watermark) ONLY after the whole table
@@ -337,6 +343,8 @@ YYYY-MM-DD HH:MI:SS.ffffff. The audit log records watermark=<from>-><to>.
 Notes:
   * Each cycle produces files with only the changed rows; the target load must merge
     (upsert) them. Deletes in the source are not captured.
+  * Rows with a NULL cdc_column are taken only by the initial extract; incremental cycles
+    cannot see them. Use a NOT NULL cdc_column, or --reset-watermark for a full reload.
   * The cdc_column must be maintained on insert and update. Rows updated with a value at
     or below the watermark (e.g. back-dated timestamps) are missed.
   * Use --new-cycle for each new incremental cycle; --reset-watermark for a full reload.

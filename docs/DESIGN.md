@@ -103,6 +103,7 @@ session_limit_errors = 2633,3130
 session_limit_patterns = Too many load/unload tasks,session limit,No more sessions
 bteq_fallback = true           ; after FastExport session-limit retries are exhausted, try BTEQ EXPORT
 job_timeout_seconds = 0        ; 0 = no timeout
+log_tool_output = masked       ; masked | errors | none: tool output kept in job logs
 
 [format]
 delimiter = |

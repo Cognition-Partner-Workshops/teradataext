@@ -67,6 +67,7 @@ DEFAULT_CONFIG = {
         "session_limit_patterns": "Too many load/unload tasks,session limit,No more sessions",
         "bteq_fallback": "true",
         "job_timeout_seconds": "0",
+        "log_tool_output": "masked",
     },
     "format": {
         "delimiter": "|",

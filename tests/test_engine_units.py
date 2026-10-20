@@ -48,6 +48,15 @@ class TestHelpers(unittest.TestCase):
         self.assertNotIn("LongSecret", out)
         self.assertNotIn("Secret9", out)
 
+    def test_tool_log_modes(self):
+        out = "UTY8724 Logon ok\n12 total records written\n*** Failure 3807 Object 'X' does not exist."
+        self.assertEqual(tdx.tool_log_text(out, "masked"), out)
+        self.assertEqual(tdx.tool_log_text(out, "errors"), "*** Failure 3807 Object 'X' does not exist.")
+        self.assertNotIn("Object", tdx.tool_log_text(out, "none"))
+        self.assertEqual(tdx.tool_error_summary(out, 8, "none"), "Teradata error 3807")
+        self.assertIn("Object 'X'", tdx.tool_error_summary(out, 8, "errors"))
+        self.assertEqual(tdx.tool_error_summary("", 12, "none"), "exit code 12")
+
     def _stream(self, data, tool):
         with tempfile.TemporaryDirectory() as d:
             raw = Path(d) / "x.raw"
@@ -130,6 +139,40 @@ class TestResumeAfterZip(unittest.TestCase):
         self.assertEqual(state[key]["status"], "done")
         self.assertEqual((state[key]["zip_file"], state[key]["zip_sha256"]), (zip_name, zip_sha))
         self.assertEqual(env.requests(query="export"), [])
+
+
+@unittest.skipUnless(ENGINE.exists(), "src/extract.py not present yet")
+class TestLogToolOutput(unittest.TestCase):
+    def run_failing(self, mode):
+        env = TdxEnv(config={"extract": {"log_tool_output": mode}})
+        self.addCleanup(env.cleanup)
+        env.add_failure(table="TDX_DB.BIG", query="export", chunk=1, times=1, code=3707,
+                        message="Syntax error, expected something")
+        rc, out, err = env.run()
+        self.assertEqual(rc, 1, out + err)
+        logs = "".join(p.read_text(encoding="utf-8") for p in (env.root / "logs").glob("*.fexp.log"))
+        logs += "".join(p.read_text(encoding="utf-8") for p in (env.root / "logs").glob("*.bteq.log"))
+        return env, logs
+
+    def test_none_keeps_no_tool_output(self):
+        env, logs = self.run_failing("none")
+        self.assertIn("log_tool_output = none", logs)
+        self.assertNotIn("Syntax error", logs)
+        self.assertNotIn("records", logs.lower())
+        self.assertIn("3707", env.state()["TDX_DB.BIG"]["last_error"])
+        self.assertNotIn("Syntax error", env.state()["TDX_DB.BIG"]["last_error"])
+
+    def test_errors_keeps_only_error_lines(self):
+        _, logs = self.run_failing("errors")
+        self.assertIn("3707", logs)
+        self.assertNotIn("total records", logs.lower())
+
+    def test_invalid_mode_is_config_error(self):
+        env = TdxEnv(config={"extract": {"log_tool_output": "verbose"}})
+        self.addCleanup(env.cleanup)
+        rc, out, err = env.run("--dry-run")
+        self.assertEqual(rc, 2, out + err)
+        self.assertIn("log_tool_output", out + err)
 
 
 if __name__ == "__main__":

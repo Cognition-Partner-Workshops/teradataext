@@ -163,6 +163,27 @@ def parse_marker(sql: str) -> dict[str, str]:
 _LOGON_RE = re.compile(r"(?im)(\.logon\s+[^,\s;]*)[^\n]*")
 
 
+TOOL_LOG_MODES = ("masked", "errors", "none")
+_TOOL_ERR_RE = re.compile(r"\b(?:Failure|Error|Failed|Warning)\b|return code encountered = '?[1-9]", re.I)
+
+
+def tool_log_text(masked: str, mode: str) -> str:
+    """What a job log keeps of (already masked) tool output: all of it, only error lines, or nothing."""
+    if mode == "masked":
+        return masked
+    if mode == "errors":
+        return "\n".join(ln for ln in masked.splitlines() if _TOOL_ERR_RE.search(ln))
+    return "(tool output not persisted: log_tool_output = none)"
+
+
+def tool_error_summary(masked: str, rc: int | None, mode: str) -> str:
+    """Short failure reason for messages/state; with mode none only the Teradata error code is kept."""
+    if mode == "none":
+        m = re.search(r"\b(?:Failure|Error)\s+(\d+)", masked)
+        return f"Teradata error {m.group(1)}" if m else f"exit code {rc}"
+    return next((ln.strip() for ln in masked.splitlines() if re.search(r"Failure|Error", ln)), f"exit code {rc}")
+
+
 def mask_text(text: str, secret: str) -> str:
     """Mask the password (and common transformed forms) plus anything after the user on .LOGON lines."""
     text = _LOGON_RE.sub(lambda m: m.group(1) + "," + MASK, text)
@@ -377,6 +398,7 @@ class Settings:
     session_limit_patterns: list[str]
     bteq_fallback: bool
     job_timeout_seconds: float
+    log_tool_output: str
     delimiter: str
     null_sentinel: str
     empty_sentinel: str
@@ -523,6 +545,7 @@ def load_settings(config_path: Path, parallel_override: str | None = None) -> Se
         session_limit_patterns=patterns,
         bteq_fallback=_bool(cp, "extract", "bteq_fallback", True),
         job_timeout_seconds=float(_get(cp, "extract", "job_timeout_seconds", "0") or 0),
+        log_tool_output=_get(cp, "extract", "log_tool_output", "masked").lower(),
         delimiter=delimiter,
         null_sentinel=null_sentinel,
         empty_sentinel=empty_sentinel,
@@ -530,6 +553,8 @@ def load_settings(config_path: Path, parallel_override: str | None = None) -> Se
         big_decimal_quote=_get(cp, "format", "big_decimal_quote", '"'),
         big_decimal_threshold=_int(cp, "format", "big_decimal_threshold", 18),
     )
+    if s.log_tool_output not in TOOL_LOG_MODES:
+        raise ConfigError("[extract] log_tool_output must be one of: " + ", ".join(TOOL_LOG_MODES))
     if s.lob_max_length < 1 or s.max_row_length < 1:
         raise ConfigError("[extract] lob_max_length and max_row_length must be positive")
     return s
@@ -855,7 +880,7 @@ class ToolRunner:
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(
                 f"===== {iso(utcnow())} {tool} sessions={sessions} rc={rc} "
-                f"elapsed={time.monotonic() - started:.1f}s\n{output}\n"
+                f"elapsed={time.monotonic() - started:.1f}s\n{tool_log_text(output, self.s.log_tool_output)}\n"
             )
         if self.stopping.is_set():
             raise KeyboardInterrupt
@@ -863,10 +888,7 @@ class ToolRunner:
             raise ToolError(f"{tool} timed out after {timeout:.0f}s ({log_path.name})")
         failed = rc != 0 or (tool == "bteq" and re.search(r"\*\*\* (?:Failure|Error) \d+", raw_out))
         if failed:
-            first = next(
-                (ln.strip() for ln in output.splitlines() if re.search(r"Failure|Error", ln)),
-                f"exit code {rc}",
-            )
+            first = tool_error_summary(output, rc, self.s.log_tool_output)
             raise ToolError(
                 f"{tool} failed (rc={rc}): {first} (see {log_path.name})",
                 session_limit=self.is_session_limit(raw_out),

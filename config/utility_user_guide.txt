@@ -179,6 +179,11 @@ with --config PATH.
   bteq_fallback           true = after FastExport session-limit retries are exhausted try
                           the job once with BTEQ EXPORT.
   job_timeout_seconds     Kill a fexp/bteq job running longer than this. 0 = no timeout.
+  log_tool_output         masked | errors | none (default masked). What job logs keep of
+                          fexp/bteq output. The password is masked in every mode, but masking
+                          cannot recognise every transformed echo of it; use errors (only
+                          error/failure lines) or none (no tool output; failures report only
+                          the Teradata error code) where logs are widely readable.
 
 [format]
   delimiter               Field delimiter (default |).

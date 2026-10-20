@@ -63,18 +63,25 @@ Host
     startup. AIX and Solaris may ship an older bash or none: install a current bash and
     put it first on PATH, or start the utility as  /path/to/bash teradata_extract.sh .
   * A POSIX awk: gawk, mawk, nawk / onetrue awk (original-awk) or busybox awk. The
-    utility runs the awk named in TDX_AWK (default: awk on PATH). mawk or gawk is
-    recommended for speed (section 13). [VALIDATE] On Solaris /usr/bin/awk may be the
-    old, non-POSIX awk; set TDX_AWK=nawk (or /usr/xpg4/bin/awk, or gawk).
-  * od, gzip and tar (standard on all supported systems).
+    utility runs the command in TDX_AWK, which may include arguments, e.g.
+    TDX_AWK="busybox awk". When TDX_AWK is unset the utility uses /usr/xpg4/bin/awk on
+    Solaris if it exists (/usr/bin/awk there is the old, non-POSIX awk), otherwise awk
+    from PATH. mawk or gawk is recommended for speed (section 13).
+  * od, gzip, tar and mkfifo (standard on all supported systems).
   * One SHA-256 tool. The first one found is used, in this order: sha256sum,
-    shasum -a 256, openssl dgst -sha256, digest -a sha256 (Solaris). Without any of them
-    the utility exits with code 2 at startup.
+    shasum -a 256, openssl dgst -sha256, digest -a sha256 (Solaris).
   * Teradata Tools and Utilities (TTU) 16.20 with FastExport (fexp) and BTEQ (bteq) on
     PATH, or configured with absolute paths in fexp_path / bteq_path.
+  * bc (POSIX), only for range chunks on DECIMAL/NUMBER keys with a scale or on integer
+    keys longer than 18 digits (section 9). Without bc such a table fails with a clear
+    error; other tables are not affected.
   * Disk space in output_dir for the raw export (.raw) of each running job, the .dat
     files and their .tar.gz archive (the .dat files are removed after a successful
     archive check unless keep_raw_after_zip = true).
+
+Startup checks: bash >= 4.3, the awk and od are always checked. gzip, tar, mkfifo, a
+SHA-256 tool and fexp/bteq are checked too, except with --status or --help. A missing
+item ends the run with exit code 2 before anything is extracted.
 
 Teradata user rights (logon user)
   * SELECT on every source table (or view) to be extracted.
@@ -82,7 +89,8 @@ Teradata user rights (logon user)
     metadata).
   * CREATE TABLE (and DROP TABLE) rights in logtable_database (or the user's default
     database when logtable_database is empty) for the FastExport restart log tables
-    tdx_lt_<hash>.
+    tdx_lt_<hash> (<hash> = the first 12 hex digits of the SHA-256 of the job id; earlier
+    versions used SHA-1, so the names differ from theirs).
   * Enough spool space for the largest export query / chunk.
   * The system must allow FastExport (utility) sessions for this user; the number of
     concurrent utility jobs is limited by the system (see section 12).
@@ -162,8 +170,9 @@ with --config PATH.
   output_dir         .dat and .tar.gz files (default data).
   metadata_dir       .meta.ini files and audit.log (default metadata).
   log_dir            Run log and per-job tool output (default logs).
-  work_dir           Generated scripts (password masked) and the lock directory
-                     .process_state.lock/ (default work).
+  work_dir           Generated scripts (password masked), the lock directory
+                     .process_state.lock/ and the per-run temporary directory
+                     .tdx-run-<pid>/ (default work).
   source_tables_file Table definitions (default config/source_tables.ini).
   process_state_file Machine-managed state (default config/process_state.ini).
 
@@ -264,10 +273,12 @@ names use <db>_<table> lower-cased with characters outside [A-Za-z0-9_] replaced
                              does not connect to Teradata.
   --status                   Print the state summary and exit; does not connect.
   -v, --verbose              DEBUG logging on the console.
+  -h, --help                 Show the usage and exit.
 
 Environment variables
   TD_USER, TD_PASS   Credentials (section 4).
-  TDX_AWK            awk binary used by the engine (default awk; section 13). The test
+  TDX_AWK            awk command used by the engine, arguments allowed (e.g.
+                     "busybox awk"); default and Solaris rule in section 2. The test
                      suite runs every awk variant through it.
   TDX_FEXP, TDX_BTEQ Override fexp_path / bteq_path (the tests use them for fake tools).
 
@@ -275,7 +286,8 @@ Exit codes
   0    all queued tables done
   1    at least one table failed (others may be done; rerun to resume)
   2    configuration, credential, tool or lock error - nothing extracted
-  130  interrupted (Ctrl-C / SIGINT); state saved, resumable
+  130  interrupted (Ctrl-C / SIGINT or SIGTERM): the running fexp/bteq jobs are
+       stopped, state is saved; resumable
 
 Single-instance lock: only one instance can run against a work directory (and its state
 file) at a time. At startup the utility creates the directory work/.process_state.lock/
@@ -292,6 +304,9 @@ is running:
 
 The pid check only sees processes on the local host: do not share one work_dir between
 hosts.
+
+Per-run temporary files (among them the working copy of the state) are kept in
+work/.tdx-run-<pid>/ and removed when the run exits.
 
 Examples
   ./teradata_extract.sh --dry-run
@@ -357,11 +372,12 @@ Chunk column / strategy:
   * unchunked tables have chunk_strategy = none and no .partNNN suffix.
 
 Range boundaries: integer and DATE keys are split with exactly the same formula as in
-earlier versions. For DECIMAL keys with a scale or more than 18 digits the boundaries are
-computed in awk; their literals in the chunk predicates (where in the state file, the
-work/ scripts) may differ textually from those of the former engine. Coverage is
-unchanged: every value, including NULL and values outside the MIN..MAX read at planning
-time, still falls into a chunk.
+earlier versions. For DECIMAL/NUMBER keys with a scale, and integer keys longer than 18
+digits, the boundaries are computed with bc (section 2; without bc the table fails with a
+clear error). Boundaries of keys with a scale are rounded to that scale, so their literals
+in the chunk predicates (where in the state file, the work/ scripts) may differ textually
+from those of the former engine. Coverage is unchanged: every value, including NULL and
+values outside the MIN..MAX read at planning time, still falls into a chunk.
 
 Range chunks on skewed data can be uneven. For tables with a poor PI, set chunk_column to
 a well-distributed numeric/date column. The static where filter is ANDed into every chunk.
@@ -458,7 +474,7 @@ reported by fexp/bteq, otherwise the job fails.
 
 Raw decoding
   The raw file is read with od (od -An -v -tu1, run with LC_ALL=C) and decoded by
-  lib/rawdecode.awk, run with the awk named in TDX_AWK (default awk). The layout (with or
+  lib/rawdecode.awk, run with the awk selected by TDX_AWK (section 2). The layout (with or
   without the record-length prefix and end-of-record byte) is auto-detected; the job
   fails when no layout fits the whole file. Every byte passes through unchanged, except
   that a NUL (0x00) byte inside a record fails the job: portable awks cannot write NUL
@@ -621,8 +637,8 @@ Exit code 2 (nothing extracted)
   * "credentials" - set both TD_USER and TD_PASS, or fix credentials_file
     (exists, owned by you, chmod 600).
   * "tool not found" - fexp/bteq not on PATH; set fexp_path/bteq_path or fix PATH.
-  * bash older than 4.3, or awk, od, gzip, tar or a SHA-256 tool missing - install it
-    or fix PATH; select the awk with TDX_AWK (section 2).
+  * bash older than 4.3, or awk, od, gzip, tar, mkfifo or a SHA-256 tool missing -
+    install it or fix PATH; select the awk with TDX_AWK (section 2).
   * connect check failed - host/port wrong, DNS, firewall; test: nc -vz <host> 1025.
   * lock - another instance is running (its pid is in work/.process_state.lock/pid).
     A stale lock left by a killed run is removed automatically; see section 7 to clear
@@ -654,6 +670,8 @@ Table marked failed (exit 1)
   * "record length ... exceeds max_row_length" - raise max_row_length if the tools and
     target allow it.
   * "unsupported type" - UDT/ARRAY/etc.: export through a view that casts the column.
+  * "bc is required for range chunks on this key" - install bc (section 2), or set
+    chunk_column to an integer or DATE column.
   * non-LATIN column with ASCII - set session_charset = UTF8.
   * row count mismatch / raw layout not recognised - check the tool log; report it with
     the work/ script and tool versions.
@@ -768,4 +786,5 @@ Further target notes [VALIDATE]:
   logs/<db>_<table>[.partNNN].<fexp|bteq>.log  per-job tool output (password masked)
   work/<db>_<table>[.partNNN].<fexp|bteq>      generated scripts (LOGON masked)
   work/.process_state.lock/                    single-instance lock (directory with pid)
+  work/.tdx-run-<pid>/                         per-run temporary files (removed at exit)
   tests/run_tests.sh                           test suite (fake fexp/bteq; no Teradata)

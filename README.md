@@ -57,17 +57,22 @@ work/                             generated scripts (masked), lock dir    (creat
 ## Prerequisites
 
 - bash >= 4.3
-- a POSIX awk: gawk, mawk, nawk / onetrue awk, or busybox awk (selected with `TDX_AWK`,
-  default `awk`; mawk or gawk recommended, see [Performance](#performance))
-- `od`, `gzip`, `tar`
+- a POSIX awk: gawk, mawk, nawk / onetrue awk, or busybox awk, selected with `TDX_AWK`
+  (arguments allowed, e.g. `TDX_AWK="busybox awk"`). When it is unset, Solaris uses
+  `/usr/xpg4/bin/awk` if it exists, otherwise `awk` from PATH. mawk or gawk is
+  recommended, see [Performance](#performance).
+- `od`, `gzip`, `tar`, `mkfifo`
 - one SHA-256 tool, the first found of `sha256sum`, `shasum -a 256`,
   `openssl dgst -sha256`, `digest -a sha256` (Solaris)
 - Teradata Tools and Utilities 16.20: `fexp` and `bteq` on PATH (or `fexp_path` /
   `bteq_path`)
+- `bc` (POSIX), only for range chunks on DECIMAL/NUMBER keys with a scale or integer keys
+  longer than 18 digits; without it such a table fails with a clear error
 
-Supported systems: Linux, AIX, Solaris. The entrypoint checks these at startup and exits
-with code 2 if one is missing. Details: section 2 of the
-[user guide](config/utility_user_guide.txt).
+Supported systems: Linux, AIX, Solaris. At startup the entrypoint always checks bash
+>= 4.3, the awk and `od`. Unless `--status` or `--help` is given, it also checks `gzip`,
+`tar`, `mkfifo`, a SHA-256 tool and `fexp`/`bteq`. A missing item means exit code 2.
+Details: section 2 of the [user guide](config/utility_user_guide.txt).
 
 ## Quick start
 
@@ -126,17 +131,18 @@ To use a credentials file instead of environment variables, copy
 ```
 
 Exit codes: `0` all queued tables done, `1` at least one table failed, `2` configuration /
-credential / tool / lock error (nothing extracted), `130` interrupted (state saved,
-resumable).
+credential / tool / lock error (nothing extracted), `130` interrupted by SIGINT/SIGTERM
+(running fexp/bteq jobs are stopped, state saved, resumable).
 
-Environment variables: `TD_USER` / `TD_PASS` (credentials), `TDX_AWK` (awk binary,
-default `awk`), `TDX_FEXP` / `TDX_BTEQ` (override `fexp_path` / `bteq_path`).
+Environment variables: `TD_USER` / `TD_PASS` (credentials), `TDX_AWK` (awk command,
+arguments allowed), `TDX_FEXP` / `TDX_BTEQ` (override `fexp_path` / `bteq_path`).
 
 Only one instance runs at a time per work directory. The lock is the directory
 `work/.process_state.lock/`, which holds the pid of the running instance. A lock left by a
 killed run is removed automatically when that pid no longer exists. To clear it by hand,
 check that no instance is running (`ps -p $(cat work/.process_state.lock/pid)`), then
-`rm -rf work/.process_state.lock`.
+`rm -rf work/.process_state.lock`. Per-run temporary files go in `work/.tdx-run-<pid>/`,
+which is removed at exit.
 
 ## Output
 
@@ -246,6 +252,7 @@ compare the outputs byte for byte after the same normalization.
 - A NUL (0x00) byte inside a record fails the job: portable awks cannot write NUL bytes,
   and the utility never drops data silently.
 - Raw decoding is much slower than in the former engine (see [Performance](#performance)).
-- Range chunks on DECIMAL keys with a scale or more than 18 digits: the boundary literals
-  may differ textually from the former engine; every value (NULL and out-of-range
+- Range chunks on DECIMAL/NUMBER keys with a scale or integer keys longer than 18 digits
+  need `bc`. Boundaries of keys with a scale are rounded to that scale, so the literals
+  may differ textually from the former engine. Every value (NULL and out-of-range
   included) is still covered.

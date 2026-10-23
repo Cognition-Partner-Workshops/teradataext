@@ -3,7 +3,7 @@
 A small extraction utility for **Teradata Database 16.20** on UNIX/Linux (Linux, AIX,
 Solaris). It uses FastExport (`fexp`) for bulk data and BTEQ (`bteq`) for metadata, small
 tables and LOB tables, and writes pipe-delimited files that load into Amazon Redshift (or
-similar). It is written in bash 4.3+ and POSIX awk and needs only standard UNIX tools
+similar). It is written in bash 4.2+ and POSIX awk and needs only standard UNIX tools
 plus Teradata Tools and Utilities 16.20.
 
 It replaces the former Python 3.12 engine (`src/extract.py`, still available in the git
@@ -41,7 +41,7 @@ instead of `.zip`.
 
 ```
 teradata_extract.sh               entrypoint
-lib/                              engine: *.sh (bash 4.3+) and *.awk (POSIX awk)
+lib/                              engine: *.sh (bash 4.2+) and *.awk (POSIX awk)
 config/
   main_config.ini                 main configuration (user-maintained)
   source_tables.ini               tables to extract (user-maintained)
@@ -59,7 +59,7 @@ work/                             generated scripts (masked), lock dir    (creat
 
 ## Prerequisites
 
-- bash >= 4.3
+- bash >= 4.2
 - a POSIX awk: gawk, mawk, nawk / onetrue awk, or busybox awk, selected with `TDX_AWK`
   (arguments allowed, e.g. `TDX_AWK="busybox awk"`). When it is unset, Solaris uses
   `/usr/xpg4/bin/awk` if it exists, otherwise `awk` from PATH. mawk or gawk is
@@ -73,7 +73,7 @@ work/                             generated scripts (masked), lock dir    (creat
   longer than 18 digits; without it such a table fails with a clear error
 
 Supported systems: Linux, AIX, Solaris. At startup the entrypoint always checks bash
->= 4.3, the awk and `od`. Unless `--status` or `--help` is given, it also checks `gzip`,
+>= 4.2, the awk and `od`. Unless `--status` or `--help` is given, it also checks `gzip`,
 `tar`, `mkfifo`, a SHA-256 tool and `fexp`/`bteq`. A missing item means exit code 2.
 Details: section 2 of the [user guide](config/utility_user_guide.txt).
 

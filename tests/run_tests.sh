@@ -68,7 +68,7 @@ for file in "$TESTS_DIR"/test_*.sh; do
     base=$(basename "$file" .sh)
     tests=$(set +u; export TDX_TEST_TMP=$RUN_TMP; source "$TESTS_DIR/lib/assert.sh"; source "$TESTS_DIR/lib/env.sh"
         source "$file" >/dev/null 2>&1; declare -F | while read -r _ _ name; do
-        case $name in test_*) echo "$name" ;; esac; done)
+        case $name in (test_*) echo "$name" ;; esac; done)
     for t in $tests; do
         selected "$base:$t" || continue
         dir=$RUN_TMP/$base.$t

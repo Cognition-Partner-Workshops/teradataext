@@ -5,7 +5,7 @@ configuration, the documentation and the test suite. Anything not covered here i
 implementation detail of `lib/`.
 
 Target: Teradata Database 16.20, Teradata Tools and Utilities (`fexp`, `bteq`) on a
-UNIX/Linux host (Linux, AIX, Solaris). **No Python**: bash 4.3+, any POSIX awk and POSIX
+UNIX/Linux host (Linux, AIX, Solaris). **No Python**: bash 4.2+, any POSIX awk and POSIX
 utilities only (section 13). The behaviour is that of the former Python 3.12 engine
 (`src/extract.py`, removed; see git history), apart from the archive format (tar.gz).
 
@@ -376,7 +376,7 @@ scenarios and compare outputs byte for byte after the same normalization.
 
 | File | Responsibility |
 |---|---|
-| `teradata_extract.sh` | checks bash >= 4.3, awk, `od`, `gzip`, `tar`, a SHA-256 tool, `fexp`/`bteq` (not for `--status`/`--dry-run` beyond PATH lookup); creates dirs; sources `lib/*.sh`; runs `tdx_main "$@"` |
+| `teradata_extract.sh` | checks bash >= 4.2, awk, `od`, `gzip`, `tar`, a SHA-256 tool, `fexp`/`bteq` (not for `--status`/`--dry-run` beyond PATH lookup); creates dirs; sources `lib/*.sh`; runs `tdx_main "$@"` |
 | `lib/common.sh` | logging (run log + console), errors/exit codes, quoting helpers, UTC time, signal traps |
 | `lib/config.sh` + `lib/ini.awk` | INI parsing into bash associative arrays, settings validation, source tables |
 | `lib/creds.sh` | TD_USER/TD_PASS or credentials file (owner + mode via `ls -ln`) |

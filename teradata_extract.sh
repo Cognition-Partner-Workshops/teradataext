@@ -3,8 +3,8 @@
 set -uo pipefail
 
 if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ] ||
-    { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -lt 3 ]; }; then
-    echo "ERROR: bash >= 4.3 is required (found ${BASH_VERSION:-unknown})" >&2
+    { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -lt 2 ]; }; then
+    echo "ERROR: bash >= 4.2 is required (found ${BASH_VERSION:-unknown})" >&2
     exit 2
 fi
 

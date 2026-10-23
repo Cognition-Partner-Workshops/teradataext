@@ -59,9 +59,12 @@ Teradata Tools and Utilities it needs only standard UNIX tools (section 2).
 Host
   * Supported systems: Linux, AIX and Solaris, with network access to the Teradata system
     (default port 1025).
-  * bash 4.3 or later (bash --version). teradata_extract.sh checks the version at
+  * bash 4.2 or later (bash --version). teradata_extract.sh checks the version at
     startup. AIX and Solaris may ship an older bash or none: install a current bash and
     put it first on PATH, or start the utility as  /path/to/bash teradata_extract.sh .
+    On bash 4.2 the scheduler checks for finished jobs every 0.05 s (every 1 s where
+    sleep takes whole seconds only), so the next chunk may start up to 1 s later;
+    output, state and exit codes are the same.
   * A POSIX awk: gawk, mawk, nawk / onetrue awk (original-awk) or busybox awk. The
     utility runs the command in TDX_AWK, which may include arguments, e.g.
     TDX_AWK="busybox awk". When TDX_AWK is unset the utility uses /usr/xpg4/bin/awk on
@@ -79,7 +82,7 @@ Host
     files and their .tar.gz archive (the .dat files are removed after a successful
     archive check unless keep_raw_after_zip = true).
 
-Startup checks: bash >= 4.3, the awk and od are always checked. gzip, tar, mkfifo, a
+Startup checks: bash >= 4.2, the awk and od are always checked. gzip, tar, mkfifo, a
 SHA-256 tool and fexp/bteq are checked too, except with --status or --help. A missing
 item ends the run with exit code 2 before anything is extracted.
 
@@ -661,7 +664,7 @@ Exit code 2 (nothing extracted)
   * "credentials" - set both TD_USER and TD_PASS, or fix credentials_file
     (exists, owned by you, chmod 600).
   * "tool not found" - fexp/bteq not on PATH; set fexp_path/bteq_path or fix PATH.
-  * bash older than 4.3, or awk, od, gzip, tar, mkfifo or a SHA-256 tool missing -
+  * bash older than 4.2, or awk, od, gzip, tar, mkfifo or a SHA-256 tool missing -
     install it or fix PATH; select the awk with TDX_AWK (section 2).
   * connect check failed - host/port wrong, DNS, firewall; test: nc -vz <host> 1025.
   * lock - another instance is running (its pid is in work/.process_state.lock/pid).
@@ -795,7 +798,7 @@ Further target notes [VALIDATE]:
 ------------------------------------------------------------------------------------------
 
   teradata_extract.sh                          entrypoint
-  lib/*.sh, lib/*.awk                          engine (bash 4.3+, POSIX awk)
+  lib/*.sh, lib/*.awk                          engine (bash 4.2+, POSIX awk)
   config/main_config.ini                       main configuration (user-maintained)
   config/source_tables.ini                     table definitions (user-maintained)
   config/process_state.ini                     extraction state (MACHINE-MANAGED)

@@ -3,7 +3,7 @@
 Bash + POSIX awk stand-ins for Teradata FastExport and BTEQ (DESIGN.md sections 7 and 12).
 The engine is pointed at them with `TDX_FEXP=tests/fakes/fexp` and `TDX_BTEQ=tests/fakes/bteq`.
 Both are thin `#!/usr/bin/env bash` wrappers around `_tdxfake.sh` (process handling, locking,
-binary output) and `_tdxfake.awk` (script scanning, fixture lookup, answers). They need bash 4.3+
+binary output) and `_tdxfake.awk` (script scanning, fixture lookup, answers). They need bash 4.2+
 and any POSIX awk (`$TDX_AWK`, default `awk`; may contain arguments, e.g. `busybox awk`). All text
 is handled with `LC_ALL=C`; binary bytes are written with `printf` octal escapes.
 

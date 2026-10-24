@@ -370,3 +370,14 @@ test_table_list_names_are_literal() {
     tt_run --status
     assert_contains "$TDX_OUT" "TDX_DB.MIXED*"
 }
+
+test_connect_check_reports_reason() {
+    it_cred_env
+    tt_config_set teradata connect_check true
+    tt_config_set teradata host 127.0.0.1
+    tt_config_set teradata port 1
+    tt_run
+    assert_rc 2 "$TDX_RC" "$TDX_OUT$TDX_ERR"
+    assert_contains "$TDX_ERR" "cannot reach 127.0.0.1:1: connection failed (Connection refused)"
+    assert_eq 0 "$(tt_fake_calls)"
+}

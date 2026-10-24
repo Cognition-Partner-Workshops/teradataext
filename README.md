@@ -60,8 +60,8 @@ work/                             generated scripts (masked), lock dir    (creat
 ## Prerequisites
 
 - bash >= 4.2
-- a POSIX awk: gawk, mawk, nawk / onetrue awk, or busybox awk, selected with `TDX_AWK`
-  (arguments allowed, e.g. `TDX_AWK="busybox awk"`). When it is unset, Solaris uses
+- a POSIX awk: gawk, mawk, nawk / onetrue awk (old SVR4-style nawk too), or busybox awk,
+  selected with `TDX_AWK` (arguments allowed, e.g. `TDX_AWK="busybox awk"`). When it is unset, Solaris uses
   `/usr/xpg4/bin/awk` if it exists, otherwise `awk` from PATH. mawk or gawk is
   recommended, see [Performance](#performance).
 - `od`, `gzip`, `tar`, `mkfifo`
@@ -228,7 +228,7 @@ See section 13 of the [user guide](config/utility_user_guide.txt).
 
 ```sh
 tests/run_tests.sh               # with the default awk
-tests/run_tests.sh --awk mawk    # with a given awk (gawk, mawk, original-awk, busybox awk)
+tests/run_tests.sh --awk mawk    # with a given awk (gawk, mawk, original-awk, busybox awk, old nawk)
 ```
 
 The tests are plain bash and do not need a Teradata system. `tests/fakes/fexp` and

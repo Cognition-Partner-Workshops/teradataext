@@ -258,8 +258,8 @@ tdx_run_queue() {
 }
 
 tdx_check_connect() {
-    local host=$1 port=$2 p i=0
-    (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null &
+    local host=$1 port=$2 p i=0 err="$TDX_RUNDIR/connect.err" why=""
+    (exec 3<>"/dev/tcp/$host/$port") 2>"$err" &
     p=$!
     while kill -0 "$p" 2>/dev/null && ((i < 100)); do
         tdx_short_sleep
@@ -270,7 +270,11 @@ tdx_check_connect() {
         wait "$p" 2>/dev/null
         tdx_config_error "cannot reach $host:$port: timed out"
     fi
-    wait "$p" || tdx_config_error "cannot reach $host:$port: connection failed"
+    wait "$p" && return 0
+    [[ -s $err ]] && IFS= read -r why <"$err"
+    why=${why##*: }
+    [[ $why == *"No such file"* ]] && why="$why: this bash has no /dev/tcp support, set connect_check = false"
+    tdx_config_error "cannot reach $host:$port: connection failed${why:+ ($why)}"
 }
 
 # ---------------------------------------------------------------- main

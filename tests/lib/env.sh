@@ -250,7 +250,7 @@ tt_requests() {
         done
     done | TDXQ=${1:-} TDXT=$(tt_upper "${2:-}") tt_awk -F '\t' '
         BEGIN { q = ENVIRON["TDXQ"]; t = ENVIRON["TDXT"] }
-        { delete m; for (i = 3; i <= NF; i++) { p = index($i, "="); m[substr($i, 1, p - 1)] = substr($i, p + 1) } }
+        { split("", m); for (i = 3; i <= NF; i++) { p = index($i, "="); m[substr($i, 1, p - 1)] = substr($i, p + 1) } }
         q != "" && m["query"] != q { next }
         t != "" && toupper(m["db"] "." m["table"]) != t { next }
         { print }'

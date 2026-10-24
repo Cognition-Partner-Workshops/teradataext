@@ -165,7 +165,12 @@ with --config PATH.
   logtable_database  Database for the FastExport .LOGTABLE. Empty = the user's default
                      database. Needs CREATE TABLE rights.
   connect_check      true/false. TCP connect to host:port before starting; failure ends
-                     the run with exit 2 before anything is extracted.
+                     the run with exit 2 before anything is extracted. The message
+                     ends with the system's reason in brackets, e.g. "(Connection
+                     refused)" or "(Name or service not known)". The check uses bash
+                     /dev/tcp; bteq/fexp resolve the host themselves (e.g. COP names)
+                     and do not use port, so if bteq logs on but the check fails, set
+                     connect_check = false.
 
 [paths]
   base_dir           Base for all relative paths. Empty = parent of the directory holding

@@ -47,7 +47,7 @@ ini_value() {
         BEGIN { sec = ENVIRON["TDX_SEC"]; key = ENVIRON["TDX_KEY"] }
         /^[ \t]*[#;]/ { next }
         /^[ \t]*\[/ { s = $0; sub(/^[ \t]*\[/, "", s); sub(/\][ \t]*$/, "", s); insec = (s == sec); next }
-        insec { k = $0; sub(/=.*/, "", k); gsub(/^[ \t]+|[ \t]+$/, "", k)
+        insec { k = $0; sub("=.*", "", k); gsub(/^[ \t]+|[ \t]+$/, "", k)
                 if (k == key) { v = substr($0, index($0, "=") + 1); gsub(/^[ \t]+|[ \t]+$/, "", v); print v; exit } }
     ' "$1"
 }

@@ -391,7 +391,11 @@ scenarios and compare outputs byte for byte after the same normalization.
 
 Portability rules: no GNU-only options (`sed -i`, `grep -P`, `date -d`, `stat`, `readlink -f`,
 `timeout`, `flock`, `od -w`, `tar -z`, `mktemp` options beyond `-d`). awk code must run on
-gawk, mawk, onetrue awk (original-awk) and busybox awk.
+gawk, mawk, onetrue awk (original-awk), busybox awk and old SVR4-style nawk (tested with
+Heirloom nawk). For the old awks: no regex literal starting with `=` (`/=` is read as the
+divide-assign operator; use a string such as `"=.*"`), no `delete array` (empty arrays with
+`split("", array)`), and a local array must be created (e.g. with `split`) before `in` is used
+on it.
 
 Archive: `tar cf - <members> | gzip -c > <name>.tar.gz.tmp`, then `gzip -t`, the member list
 (`gzip -dc | tar tf -`) must equal the expected `.dat` names, then rename to `.tar.gz`; its

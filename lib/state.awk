@@ -34,7 +34,7 @@ function addchunk(key, n,    s, cur, m, a, i, j, t, seen, out, sep) {
     s = secidx(key, 1)
     cur = getk(s, "chunks_done")
     m = split(cur, a, ",")
-    j = 0
+    j = 0; split("", seen)
     for (i = 1; i <= m; i++) if (a[i] != "" && !((a[i] + 0) in seen)) { seen[a[i] + 0] = 1; b[++j] = a[i] + 0 }
     if (!((n + 0) in seen)) b[++j] = n + 0
     for (i = 2; i <= j; i++) { t = b[i]; for (m = i - 1; m >= 1 && b[m] > t; m--) b[m + 1] = b[m]; b[m + 1] = t }

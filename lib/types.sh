@@ -147,7 +147,7 @@ tdx_build_rule() {
             local qq
             qq=$(tdx_sql_str "$S_big_decimal_quote")
             text="$qq || $text || $qq"
-            width=$((width + 2))
+            width=$((width + 2 * ${#S_big_decimal_quote}))
         fi
         if ((big)); then tdx_rule "$i" decimal_quoted "$rs" "$width" 0 0 "$notes"; else tdx_rule "$i" decimal_text "$rs" "$width" 0 0 "$notes"; fi
         tdx_plain_value "$q" "$text"

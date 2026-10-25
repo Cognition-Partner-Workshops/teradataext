@@ -239,6 +239,15 @@ test_numbers_without_digit_grouping() {
     assert_not_contains "$all" "TRIM(CAST(ColumnId AS VARCHAR(256)))"
 }
 
+test_multichar_decimal_quote_width() {
+    tt_env_new
+    tt_set_tables "mixed TDX_DB MIXED"
+    tt_config_set format big_decimal_quote ab
+    tt_run_ok
+    # DECIMAL(38,4): up to 41 characters of numeric text plus two 2-character quotes
+    assert_contains "$(ut_export_sql)" "AS VARCHAR(41))) || 'ab' END AS VARCHAR(45))"
+}
+
 test_export_text_and_timestamp_bounded() {
     tt_env_new types.fixture
     tt_set_tables "types TDX_DB TYPES"

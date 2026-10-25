@@ -22,6 +22,11 @@ is handled with `LC_ALL=C`; binary bytes are written with `printf` octal escapes
    If it is unknown, the tool prints `*** Failure 3807 Object 'DB.TABLE' does not exist.`
 5. On a failure, the tool prints `*** Failure <code> <message>.` and exits `12` (fexp) / `8` (bteq)
    without writing that request's file.
+6. Before answering, the SQL after each marker (up to the next `;`) gets shape checks, skipping
+   strings, `"identifiers"` and comments: balanced parentheses and 2-3 `OREPLACE` arguments
+   (else `Failure 3706`), and every `OREPLACE` result directly inside `CAST`, `TRANSLATE`,
+   `OREPLACE` or `CHARACTER_LENGTH` (else `Failure 3798`, as Teradata's `VARCHAR(8000)
+   UNICODE` result would otherwise widen the record). This is not a SQL parser.
 
 Every result row is a single string: fields are joined with `|`, NULL is `\N`, and `\`, `|`, CR and
 LF are escaped with a preceding `\`. Layouts (uint16 little-endian):

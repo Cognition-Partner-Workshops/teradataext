@@ -93,6 +93,10 @@ tdxf_main() {
                 printf '*** Failure %s %s.\n' "$code" "$msg"
                 return "$exit_fail"
             fi ;;
+        SQLERR)
+            printf -v msg -- "$rest"
+            printf '*** Failure %s %s.\n' "${msg%%$'\t'*}" "${msg#*$'\t'}"
+            return "$exit_fail" ;;
         MISSING)
             printf "*** Failure 3807 Object '%s' does not exist.\n" "$key"
             return "$exit_fail" ;;

@@ -1,14 +1,16 @@
 # shellcheck shell=bash
 # Internal-query SQL, CDC predicates, range/hash chunk predicates, meta files.
 
-# tdx_wrap_fields "untrimmed1 untrimmed2" EXPR... -> REPLY (single VARCHAR row, NULL -> \N, | escaped)
+# tdx_wrap_fields "untrimmed1 untrimmed2" EXPR... -> REPLY (single VARCHAR row, NULL -> \N, | escaped).
+# Each field is cast to VARCHAR(512): OREPLACE returns VARCHAR(8000) UNICODE, and eight such fields
+# joined by || exceed Teradata's 32000-character limit (Failure 3798).
 tdx_wrap_fields() {
     local untrimmed=" $1 " e inner out=""
     shift
     for e; do
         if [[ $untrimmed == *" $e "* ]]; then inner="CAST($e AS VARCHAR(256))"; else inner="TRIM(CAST($e AS VARCHAR(256)))"; fi
         [[ -n $out ]] && out+=" || '|' || "
-        out+="COALESCE(OREPLACE(OREPLACE($inner), '\\', '\\\\'), '|', '\\|'), '\\N')"
+        out+="COALESCE(CAST(OREPLACE(OREPLACE($inner, '\\', '\\\\'), '|', '\\|') AS VARCHAR(512)), '\\N')"
     done
     REPLY=$out
 }

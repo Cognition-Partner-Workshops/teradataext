@@ -149,6 +149,13 @@ tdx_prepare() {
         tdx_write_meta "$meta_path" "$key" none "" "n/a" "$pi_list" 0
         tdx_fail "unsupported column(s): $unsup"
     fi
+    tdx_record_width
+    local rwidth=$REPLY
+    tdx_varchar_max
+    if ((rwidth > REPLY)); then
+        tdx_write_meta "$meta_path" "$key" none "" "n/a" "$pi_list" 0
+        tdx_fail "table too wide to export: its columns add up to $rwidth characters per record, over Teradata's $REPLY-character VARCHAR maximum (text columns count twice their length for escaping, at most $TDX_OREPLACE_MAX)"
+    fi
 
     # CDC window
     local cdc_pred="" lower="" cdc=${T_CDC[$key]}

@@ -7,7 +7,7 @@ BEGIN {
     nc = split(ENVIRON["TDX_SL_CODES"], codes, ",")
     for (i = 1; i <= nc; i++) if (codes[i] != "") slc[codes[i] + 0] = 1
     np = split(ENVIRON["TDX_SL_PATTERNS"], pats, "\037")
-    fexp_rows = ""; bteq_rows = ""; bteq_fail = 0; sl = 0; err_code = ""; err_line = ""; nerr = 0
+    fexp_rows = ""; bteq_rows = ""; bteq_fail = 0; sl = 0; err_code = ""; err_line = ""; err_coded = 0; nerr = 0
     printf "" > body
 }
 function isw(c) { return c ~ /[A-Za-z0-9_]/ }
@@ -58,7 +58,9 @@ function pystrip(s) { sub(/^[ \t\r\f\v]+/, "", s); sub(/[ \t\r\f\v]+$/, "", s); 
     for (i = 1; i <= np; i++) if (pats[i] != "" && index(lraw, pats[i])) sl = 1
     m = mask_line(raw)
     if (err_code == "") err_code = scan_codes(m, 1, 0)
-    if (err_line == "" && (index(m, "Failure") || index(m, "Error"))) err_line = pystrip(m)
+    # a numbered "*** Failure/Error NNNN" line wins over notices such as "*** Error messages now ..."
+    if (!err_coded && m ~ /\*\*\* (Failure|Error) [0-9]/) { err_line = pystrip(m); err_coded = 1 }
+    else if (err_line == "" && (index(m, "Failure") || index(m, "Error"))) err_line = pystrip(m)
     if (mode == "masked") print m > body
     else if (mode == "errors" && is_err_line(m)) { printf "%s%s", (nerr++ ? "\n" : ""), m > body }
 }

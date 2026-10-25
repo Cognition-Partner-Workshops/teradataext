@@ -65,6 +65,7 @@ gd_snap() {
 
 gd_compare() {
     local name=$1 d=$2 g=$GOLDEN_DIR/$1 rel
+    if [ "${TDX_GOLDEN_UPDATE:-}" = 1 ]; then rm -rf "$g"; cp -R "$d" "$g"; return 0; fi
     [ -d "$g" ] || tt_fail "no golden directory $g"
     for rel in $( (cd "$g" && find . -type f; cd "$d" && find . -type f) | sed 's|^\./||' | sort -u); do
         if [ ! -f "$g/$rel" ]; then GD_FAILS+="$name: unexpected file $rel"$'\n'; continue; fi

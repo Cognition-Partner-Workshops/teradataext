@@ -1,17 +1,23 @@
 # shellcheck shell=bash
 # Internal-query SQL, CDC predicates, range/hash chunk predicates, meta files.
 
-# tdx_wrap_fields "untrimmed1 untrimmed2" EXPR... -> REPLY (single VARCHAR row, NULL -> \N, | escaped)
+# tdx_wrap_fields "untrimmed1 untrimmed2" EXPR... -> REPLY (single VARCHAR row, NULL -> \N, | escaped).
+# Each field is cast to VARCHAR(512): OREPLACE returns VARCHAR(8000) UNICODE, and eight such fields
+# joined by || exceed Teradata's 32000-character limit (Failure 3798).
 tdx_wrap_fields() {
     local untrimmed=" $1 " e inner out=""
     shift
     for e; do
         if [[ $untrimmed == *" $e "* ]]; then inner="CAST($e AS VARCHAR(256))"; else inner="TRIM(CAST($e AS VARCHAR(256)))"; fi
         [[ -n $out ]] && out+=" || '|' || "
-        out+="COALESCE(OREPLACE(OREPLACE($inner), '\\', '\\\\'), '|', '\\|'), '\\N')"
+        out+="COALESCE(CAST(OREPLACE(OREPLACE($inner, '\\', '\\\\'), '|', '\\|') AS VARCHAR(512)), '\\N')"
     done
     REPLY=$out
 }
+
+# tdx_meta_int EXPR -> REPLY: an integer metadata value without digit grouping (DBC formats
+# ColumnId as 1,025).
+tdx_meta_int() { REPLY="CAST(CAST($1 AS BIGINT) AS FORMAT '-(19)9')"; }
 
 # tdx_marker KIND KEY [name value]... -> REPLY
 tdx_marker() {
@@ -83,7 +89,7 @@ tdx_cdc_max_sql() {
     case $1 in
         DA) REPLY="CAST(CAST(MAX($REPLY) AS FORMAT 'YYYY-MM-DD') AS CHAR(10))" ;;
         TS | SZ) REPLY="CAST(CAST(CAST(MAX($REPLY) AS TIMESTAMP(6)) AS FORMAT 'YYYY-MM-DDBHH:MI:SS.S(6)') AS CHAR(26))" ;;
-        *) REPLY="MAX($REPLY)" ;;
+        *) tdx_num_text "MAX($REPLY)" "$1" "$3" "$4" ;;
     esac
 }
 

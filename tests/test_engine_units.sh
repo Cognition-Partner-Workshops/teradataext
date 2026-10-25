@@ -22,8 +22,8 @@ ut_rec() {   # ut_rec fexp|bteq|reclen|bare PAYLOAD -> one raw record on stdout
     ut_le16 "$n"; printf '%s' "$2"
     case $1 in fexp|bteq) printf '\n' ;; esac
 }
-ut_decode() {   # ut_decode RAW REC_PREFIX EOR [WANT] [LIMIT] [UTF8] -> status line; records in $RAW.dat
-    od -An -v -tu1 "$1" | tt_awk -v rec_prefix="$2" -v eor="$3" -v want="${4:-1}" -v limit="${5:-64000}" \
+ut_decode() {   # ut_decode RAW REC_PREFIX EOR [WANT] [LIMIT] [UTF8] [BE] -> status line; records in $RAW.dat
+    od -An -v -tu1 "$1" | tt_awk -v rec_prefix="$2" -v eor="$3" -v be="${7:-0}" -v want="${4:-1}" -v limit="${5:-64000}" \
         -v utf8="${6:-0}" -v delim=124 -v esc=92 -v out="$1.dat" -f "$TDX_REPO_ROOT/lib/rawdecode.awk"
 }
 
@@ -46,6 +46,19 @@ test_stream_raw_export_layouts() {
     for r in 'abc' 'de'; do ut_rec fexp "$r"; done >"$raw"
     case $(ut_decode "$raw" 1 1) in OK*) tt_fail "fexp data, bteq layout must not decode";; esac
     case $(ut_decode "$raw" 0 0) in OK*) tt_fail "fexp data, bare layout must not decode";; esac
+}
+
+test_stream_raw_export_big_endian() {
+    ut_need_file lib/rawdecode.awk
+    local raw=$TDX_TEST_TMP/x.raw
+    # BTEQ 17.20 on AIX: "\0 037 \0 035 1,025|..." = record_len 31, varchar_len 29, big-endian
+    printf '\000\005\000\003252\n\000\024\000\022P|N|1|PRODUCT_CODE\n' >"$raw"
+    assert_eq "OK 2" "$(ut_decode "$raw" 1 1 0 0 0 1)" "big-endian bteq layout"
+    printf '%s\n' 252 'P|N|1|PRODUCT_CODE' >"$TDX_TEST_TMP/expected"
+    assert_files_equal "$TDX_TEST_TMP/expected" "$raw.dat"
+    case $(ut_decode "$raw" 1 1 0 0 0 0) in OK*) tt_fail "big-endian data must not decode as little-endian";; esac
+    printf '\000\003abc\n\000\002de\n' >"$raw"
+    assert_eq "OK 2" "$(ut_decode "$raw" 0 1 0 0 0 1)" "big-endian fexp layout"
 }
 
 test_stream_raw_export_rejects_garbage() {
@@ -132,6 +145,27 @@ test_tool_log_modes() {
     assert_eq "exit code 12" "$(printf '' | tdx_tool_error_summary none 12)"
 }
 
+test_tool_row_count_lines() {
+    local f=$TDX_TEST_TMP/body l
+    for l in "*** Query completed. One row found. One column returned.:1" \
+        "*** Query completed. 12 rows found. 1 column returned.:12" "*** Query completed. No rows found.:0"; do
+        assert_contains "$(printf '%s\n' "${l%:*}" | tt_awk -v mode=masked -v body="$f" \
+            -f "$TDX_REPO_ROOT/lib/maskfn.awk" -f "$TDX_REPO_ROOT/lib/toolout.awk")" "bteq_rows=${l##*:}" "$l"
+    done
+}
+
+test_tool_error_prefers_numbered_failure() {
+    ut_need_fn tdx_tool_error_summary
+    local out=$'*** Error messages now directed to STDOUT.\n*** Logon successfully completed.\n'
+    out+=$'*** Failure 3798 A column or character expression is larger than the max size.\n'
+    out+=$'                Statement# 1, Info =0'
+    assert_eq "*** Failure 3798 A column or character expression is larger than the max size." \
+        "$(printf '%s' "$out" | tdx_tool_error_summary errors 8)"
+    assert_eq "Teradata error 3798" "$(printf '%s' "$out" | tdx_tool_error_summary none 8)"
+    assert_eq "*** Error messages now directed to STDOUT." \
+        "$(printf '%s' $'*** Error messages now directed to STDOUT.\n*** Logoff' | tdx_tool_error_summary errors 8)"
+}
+
 test_cdc_window_pred_initial_includes_nulls() {
     ut_need_fn tdx_cdc_window_pred
     tdx_cdc_window_pred I UPD "" 10 || tt_fail "rc $?"
@@ -176,8 +210,71 @@ test_wrap_fields_keeps_identifier_spaces() {
     local d=$TDX_TMP/scripts sql
     tt_fake_scripts "$d" >/dev/null
     sql=$(cat "$d"/* | grep -F '/* TDX query=columns')
-    assert_contains "$sql" "TRIM(CAST(ColumnId"
+    assert_contains "$sql" "TRIM(CAST(CAST(CAST(ColumnId AS BIGINT)"
     assert_not_contains "$sql" "TRIM(CAST(ColumnName"
+}
+
+test_metadata_fields_bounded_after_oreplace() {
+    tt_env_new
+    tt_set_tables "mixed TDX_DB MIXED"
+    tt_run_ok
+    local d=$TDX_TMP/scripts sql
+    tt_fake_scripts "$d" >/dev/null
+    sql=$(cat "$d"/* | grep -F '/* TDX query=columns')
+    assert_contains "$sql" "COALESCE(CAST(OREPLACE(OREPLACE(TRIM(CAST(CAST(CAST(ColumnId AS BIGINT) AS FORMAT '-(19)9') AS VARCHAR(256))), '\\', '\\\\'), '|', '\\|') AS VARCHAR(512)), '\\N')"
+}
+
+test_numbers_without_digit_grouping() {
+    tt_env_new
+    tt_set_tables "mixed TDX_DB MIXED" "big TDX_DB BIG" "cdc TDX_DB CDC cdc_column=UPDATED_TS"
+    tt_run_ok
+    local d=$TDX_TMP/scripts all
+    tt_fake_scripts "$d" >/dev/null
+    all=$(cat "$d"/*)
+    assert_contains "$all" "COALESCE(CAST(OREPLACE(OREPLACE(TRIM(CAST(CAST(CAST(ColumnId AS BIGINT) AS FORMAT '-(19)9') AS VARCHAR(256)))"
+    assert_contains "$all" "CAST(CAST(ColumnPosition AS BIGINT) AS FORMAT '-(19)9')"
+    assert_contains "$all" "TRIM(CAST(CAST(\"ID\" AS FORMAT '-(10)9') AS VARCHAR(25)))" "INTEGER export"
+    assert_contains "$all" "TRIM(CAST(CAST(\"AMT\" AS FORMAT '-(8)9.9(2)') AS VARCHAR(13)))" "DECIMAL(10,2) export"
+    assert_contains "$all" "CAST(MIN(\"ID\") AS FORMAT '-(10)9')" "minmax"
+    assert_not_contains "$all" "TRIM(CAST(ColumnId AS VARCHAR(256)))"
+}
+
+test_multichar_decimal_quote_width() {
+    tt_env_new
+    tt_set_tables "mixed TDX_DB MIXED"
+    tt_config_set format big_decimal_quote ab
+    tt_run_ok
+    # DECIMAL(38,4): up to 41 characters of numeric text plus two 2-character quotes
+    assert_contains "$(ut_export_sql)" "AS VARCHAR(41))) || 'ab' END AS VARCHAR(45))"
+}
+
+test_export_text_and_timestamp_bounded() {
+    tt_env_new types.fixture
+    tt_set_tables "types TDX_DB TYPES"
+    tt_config_set teradata session_charset UTF8
+    tt_run_ok
+    local sql
+    sql=$(ut_export_sql)
+    assert_contains "$sql" "ELSE TRANSLATE(OREPLACE(OREPLACE(OREPLACE(OREPLACE(TRIM(TRAILING FROM \"CH_L\")" "LATIN text back to LATIN"
+    assert_contains "$sql" "'0A'XC, '\' || '0A'XC) USING UNICODE_TO_LATIN) END AS VARCHAR(20))" "CHAR(10) LATIN -> 20"
+    assert_contains "$sql" "'0A'XC, '\' || '0A'XC) END AS VARCHAR(100))" "VARCHAR(50) UNICODE -> 100, no TRANSLATE"
+    assert_contains "$sql" "SUBSTR(TRIM(CAST(CAST(\"TS0\" AS FORMAT 'YYYY-MM-DDBHH:MI:SS') AS VARCHAR(27))), 1, 10) || 'T' || "
+    assert_not_contains "$sql" "OREPLACE(TRIM(CAST(CAST(" "timestamps do not use OREPLACE"
+}
+
+test_too_wide_table_fails_before_export() {
+    tt_env_new
+    tt_set_tables "wide TDX_DB WIDE" "big TDX_DB BIG"
+    local i
+    { printf 'TDX_DB.WIDE\ttable\n'
+      for i in 1 2 3 4 5 6 7 8 9; do printf 'TDX_DB.WIDE\tcolumn\t%s\tC%s\tCV\t4000\t\\N\t\\N\tY\t1\n' "$i" "$i"; done
+      printf 'TDX_DB.WIDE\tindex\tP\tN\t1\tC1\nTDX_DB.WIDE\tcount\t0\n'; } >>"$TDX_FIXTURE"
+    tt_run
+    assert_rc 1 "$TDX_RC" "$TDX_OUT$TDX_ERR"
+    assert_eq failed "$(tt_state TDX_DB.WIDE status)"
+    assert_contains "$(tt_state TDX_DB.WIDE last_error)" "table too wide to export: its columns add up to 72008 characters per record, over Teradata's 64000-character"
+    assert_eq done "$(tt_state TDX_DB.BIG status)"
+    assert_not_contains "$(ut_export_sql)" "table=WIDE"
 }
 
 test_new_cycle_id_never_reuses_archive_name() {

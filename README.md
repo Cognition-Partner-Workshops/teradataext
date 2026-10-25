@@ -236,12 +236,21 @@ The tests are plain bash and do not need a Teradata system. `tests/fakes/fexp` a
 environment variables and driven by plain-text fixtures (see
 [tests/fakes/README.md](tests/fakes/README.md)). They read the generated script from
 stdin, answer each marked request, write raw export files in the real tool layouts, and
-can simulate failures such as `Failure 2633`. `tests/golden/<scenario>/` holds normalized
-outputs captured from the former engine; the golden tests rerun the same scenarios and
-compare the outputs byte for byte after the same normalization.
+can simulate failures such as `Failure 2633`. They also check the shape of every SQL
+request (balanced parentheses, `OREPLACE` argument counts, `OREPLACE` results bounded
+before use) and answer `Failure 3706` / `3798` otherwise; this is not a SQL parser.
+`tests/golden/<scenario>/` holds normalized outputs; the golden tests rerun the same
+scenarios and compare the outputs byte for byte after the same normalization. After an
+intended change to the generated SQL, regenerate them with
+`TDX_GOLDEN_UPDATE=1 tests/run_tests.sh test_golden` and review the diff.
 
 ## Limitations
 
+- **Text values over 8000 characters:** text is escaped with Teradata's `OREPLACE`, which
+  returns at most 8000 characters, so a longer value (after escaping) fails the table with
+  error 9134. A table whose column widths add up to more than one Teradata VARCHAR (64000
+  LATIN / 32000 UNICODE characters, text counting twice its length) fails with "table too
+  wide to export". See section 14 of the user guide.
 - **Not yet validated against a live Teradata 16.20 system.** All testing so far uses the
   fake `fexp`/`bteq` tools.
 - The raw FastExport / BTEQ export layouts are auto-detected (with or without the

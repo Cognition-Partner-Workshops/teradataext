@@ -64,17 +64,23 @@ tdx_prepare() {
     local -a reqs=()
     tdx_marker columns "$key"
     local m=$REPLY
-    tdx_wrap_fields "ColumnName" ColumnId ColumnName ColumnType ColumnLength DecimalTotalDigits \
-        DecimalFractionalDigits Nullable CharType
+    local -a mf=()
+    for a in ColumnId ColumnName ColumnType ColumnLength DecimalTotalDigits DecimalFractionalDigits \
+        Nullable CharType; do
+        case $a in ColumnName | ColumnType | Nullable) mf+=("$a") ;; *) tdx_meta_int "$a"; mf+=("$REPLY") ;; esac
+    done
+    tdx_wrap_fields "ColumnName" "${mf[@]}"
     reqs+=("$m SELECT $REPLY FROM DBC.ColumnsV WHERE DatabaseName = $dbs AND TableName = $tbs ORDER BY ColumnId")
     tdx_marker index "$key"
     m=$REPLY
-    tdx_wrap_fields "ColumnName" IndexType UniqueFlag ColumnPosition ColumnName
+    tdx_meta_int ColumnPosition
+    tdx_wrap_fields "ColumnName" IndexType UniqueFlag "$REPLY" ColumnName
     reqs+=("$m SELECT $REPLY FROM DBC.IndicesV WHERE DatabaseName = $dbs AND TableName = $tbs ORDER BY IndexNumber, ColumnPosition")
     if [[ $S_row_estimate == stats ]]; then
         tdx_marker stats "$key"
         m=$REPLY
-        tdx_wrap_fields "" "MAX(RowCount)"
+        tdx_meta_int "MAX(RowCount)"
+        tdx_wrap_fields "" "$REPLY"
         reqs+=("$m SELECT $REPLY FROM DBC.StatsV WHERE DatabaseName = $dbs AND TableName = $tbs")
     fi
     tdx_query "$base.meta" "${reqs[@]}"
@@ -149,6 +155,13 @@ tdx_prepare() {
         tdx_write_meta "$meta_path" "$key" none "" "n/a" "$pi_list" 0
         tdx_fail "unsupported column(s): $unsup"
     fi
+    tdx_record_width
+    local rwidth=$REPLY
+    tdx_varchar_max
+    if ((rwidth > REPLY)); then
+        tdx_write_meta "$meta_path" "$key" none "" "n/a" "$pi_list" 0
+        tdx_fail "table too wide to export: its columns add up to $rwidth characters per record, over Teradata's $REPLY-character VARCHAR maximum (text columns count twice their length for escaping, at most $TDX_OREPLACE_MAX)"
+    fi
 
     # CDC window
     local cdc_pred="" lower="" cdc=${T_CDC[$key]}
@@ -173,7 +186,7 @@ tdx_prepare() {
         if [[ -z $W_cdc_to ]]; then
             tdx_marker cdcmax "$key" cdc_gt "$W_cdc_from"
             m=$REPLY
-            tdx_cdc_max_sql "$ctc" "$cname"
+            tdx_cdc_max_sql "$ctc" "$cname" "${C_tot[W_cdc_idx]}" "${C_frac[W_cdc_idx]}"
             tdx_wrap_fields "" "$REPLY"
             local wf=$REPLY
             tdx_where_sql "$lower" "${T_WHERE[$key]}"
@@ -283,7 +296,10 @@ tdx_prepare() {
             if [[ ${C_tc[cand]} == DA ]]; then
                 lohi=("CAST(CAST(MIN($q) AS FORMAT 'YYYY-MM-DD') AS CHAR(10))" "CAST(CAST(MAX($q) AS FORMAT 'YYYY-MM-DD') AS CHAR(10))")
             else
-                lohi=("MIN($q)" "MAX($q)")
+                tdx_num_text "MIN($q)" "${C_tc[cand]}" "${C_tot[cand]}" "${C_frac[cand]}"
+                lohi=("$REPLY")
+                tdx_num_text "MAX($q)" "${C_tc[cand]}" "${C_tot[cand]}" "${C_frac[cand]}"
+                lohi+=("$REPLY")
             fi
             tdx_marker minmax "$key" col "${C_name[cand]}" cdc_gt "$W_cdc_from" cdc_le "$W_cdc_to"
             m=$REPLY

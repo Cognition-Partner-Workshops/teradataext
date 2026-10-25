@@ -19,6 +19,9 @@ TDX_INTERVAL_TYPES=" YR YM MO DY DH DM DS HR HM HS MI MS SC "
 TDX_PERIOD_TYPES=" PD PT PZ PS PM "
 TDX_CHUNKABLE_TYPES=" I1 I2 I I8 D N DA "
 TDX_CDC_TYPES=" I1 I2 I I8 D N DA TS SZ "
+# OREPLACE with literal arguments returns VARCHAR(8000) CHARACTER SET UNICODE and fails (9134)
+# when a result would be longer.
+TDX_OREPLACE_MAX=8000
 
 tdx_in() { [[ $2 == *" $1 "* ]]; }
 
@@ -58,12 +61,42 @@ tdx_esc_sql() {
     REPLY="OREPLACE($x, '0A'XC, $e || '0A'XC)"
 }
 
+# tdx_text_value COL TEXT LENFN LATIN: LATIN=1 translates the (UNICODE) OREPLACE result back to LATIN
 tdx_text_value() {
-    local col=$1 text=$2 lenfn=$3 out
+    local col=$1 text=$2 lenfn=$3 latin=$4 out
     out="CASE WHEN $col IS NULL THEN $(tdx_sql_str "$S_null_sentinel")"
     [[ -n $S_empty_sentinel ]] && out+=" WHEN $lenfn($text) = 0 THEN $(tdx_sql_str "$S_empty_sentinel")"
     tdx_esc_sql "$text"
+    ((latin)) && REPLY="TRANSLATE($REPLY USING UNICODE_TO_LATIN)"
     REPLY="$out ELSE $REPLY END"
+}
+
+# tdx_esc_max CHARS -> REPLY: longest escaped value (every character escaped, OREPLACE limit)
+tdx_esc_max() { REPLY=$((2 * $1 < TDX_OREPLACE_MAX ? 2 * $1 : TDX_OREPLACE_MAX)); }
+
+# tdx_num_format TC P S -> REPLY: explicit FORMAT for an integer/bounded decimal ("" otherwise).
+# Without it, numbers are converted with the column's own FORMAT, which may group digits (1,025).
+tdx_num_format() {
+    REPLY=""
+    case $1 in
+        I1) REPLY='-(3)9' ;;
+        I2) REPLY='-(5)9' ;;
+        I) REPLY='-(10)9' ;;
+        I8) REPLY='-(19)9' ;;
+        D | N)
+            if (($2 > 0 && $2 <= 38 && $3 >= 0 && $3 <= $2)); then
+                REPLY="-($(($2 - $3 > 1 ? $2 - $3 : 1)))9"
+                (($3)) && REPLY+=".9($3)"
+            fi
+            ;;
+    esac
+}
+
+# tdx_num_text EXPR TC P S -> REPLY: EXPR cast to its explicit FORMAT (unchanged when none applies)
+tdx_num_text() {
+    local e=$1
+    tdx_num_format "$2" "${3:-0}" "${4:-0}"
+    if [[ -n $REPLY ]]; then REPLY="CAST($e AS FORMAT '$REPLY')"; else REPLY=$e; fi
 }
 
 tdx_plain_value() { REPLY="CASE WHEN $1 IS NULL THEN $(tdx_sql_str "$S_null_sentinel") ELSE $2 END"; }
@@ -91,15 +124,16 @@ tdx_build_rule() {
     q=$(tdx_sql_ident "${C_name[i]}")
     if [[ -n ${TDX_INT_TYPES[$c]+x} ]]; then
         tdx_rule "$i" int_text "${TDX_INT_TYPES[$c]}" 20 0 0 ""
-        tdx_plain_value "$q" "TRIM(CAST($q AS VARCHAR(25)))"
+        tdx_num_format "$c"
+        tdx_plain_value "$q" "TRIM(CAST(CAST($q AS FORMAT '$REPLY') AS VARCHAR(25)))"
         R_expr[i]=$REPLY
     elif [[ $c == D || $c == N ]]; then
         local bounded=0 big=0 fmt rs width notes=""
         ((p > 0 && p <= 38 && sc >= 0 && sc <= p)) && bounded=1
         ((bounded == 0 || p > S_big_decimal_threshold)) && big=1
         if ((bounded)); then
-            fmt="-($((p - sc > 1 ? p - sc : 1)))9"
-            ((sc)) && fmt+=".9($sc)"
+            tdx_num_format "$c" "$p" "$sc"
+            fmt=$REPLY
             text="TRIM(CAST(CAST($q AS FORMAT '$fmt') AS VARCHAR($((p + 3)))))"
             rs="DECIMAL($p,$sc)"
             width=$((p + 3))
@@ -113,7 +147,7 @@ tdx_build_rule() {
             local qq
             qq=$(tdx_sql_str "$S_big_decimal_quote")
             text="$qq || $text || $qq"
-            width=$((width + 2))
+            width=$((width + 2 * ${#S_big_decimal_quote}))
         fi
         if ((big)); then tdx_rule "$i" decimal_quoted "$rs" "$width" 0 0 "$notes"; else tdx_rule "$i" decimal_text "$rs" "$width" 0 0 "$notes"; fi
         tdx_plain_value "$q" "$text"
@@ -143,7 +177,8 @@ tdx_build_rule() {
         local fr=$((sc > 0 ? sc : 0)) src
         if [[ $c == TS ]]; then src=$q; else src="CAST(($q AT TIME ZONE INTERVAL '00:00' HOUR TO MINUTE) AS TIMESTAMP($fr))"; fi
         tdx_dt_format "$fr" 1
-        text="OREPLACE(TRIM(CAST(CAST($src AS FORMAT '$REPLY') AS VARCHAR(27))), ' ', 'T')"
+        text="TRIM(CAST(CAST($src AS FORMAT '$REPLY') AS VARCHAR(27)))"
+        text="SUBSTR($text, 1, 10) || 'T' || SUBSTR($text, 12)"
         if [[ $c == SZ ]]; then
             text+=" || 'Z'"
             tdx_rule "$i" utc_iso_timestamp TIMESTAMPTZ 28 0 0 ""
@@ -159,7 +194,8 @@ tdx_build_rule() {
         tdx_plain_value "$q" "TRIM(CAST($q AS VARCHAR($width)))"
         R_expr[i]=$REPLY
     elif tdx_in "$c" " CF CV CO JN XM "; then
-        local unicode=0 chars rs mult n
+        local unicode=0 chars rs mult n latin=0
+        [[ $ct != 2 ]] && tdx_in "$c" " CF CV CO " && latin=1
         if [[ $ct == 2 ]] || { tdx_in "$c" " JN XM " && [[ $S_session_charset == UTF8 ]]; }; then unicode=1; fi
         if ! tdx_in "$ct" " 0 1 2 " && tdx_in "$c" " CF CV CO "; then
             tdx_col_charset "$i"
@@ -173,8 +209,9 @@ tdx_build_rule() {
         if tdx_in "$c" " CO JN XM "; then
             n=$S_lob_max_length
             if [[ $c == XM ]]; then text="XMLSERIALIZE(CONTENT $q AS VARCHAR($n))"; else text="CAST($q AS VARCHAR($n))"; fi
-            tdx_rule "$i" escaped_text "VARCHAR(65535)" $((2 * n)) 1 1 ""
-            tdx_text_value "$q" "$text" CHARACTER_LENGTH
+            tdx_esc_max "$n"
+            tdx_rule "$i" escaped_text "VARCHAR(65535)" "$REPLY" 1 1 ""
+            tdx_text_value "$q" "$text" CHARACTER_LENGTH "$latin"
             R_expr[i]=$REPLY
             return
         fi
@@ -199,8 +236,9 @@ tdx_build_rule() {
             n=$(((chars > 1 ? chars : 1) * mult))
             rs="VARCHAR($((n < 65535 ? n : 65535)))"
         fi
-        tdx_rule "$i" escaped_text "$rs" $((2 * chars)) 0 1 ""
-        tdx_text_value "$q" "$text" CHARACTER_LENGTH
+        tdx_esc_max "$chars"
+        tdx_rule "$i" escaped_text "$rs" "$REPLY" 0 1 ""
+        tdx_text_value "$q" "$text" CHARACTER_LENGTH "$latin"
         R_expr[i]=$REPLY
         [[ $c == CF && $S_char_trim != none ]] && R_notes[i]="CHAR padding trimmed ($S_char_trim)"
     elif tdx_in "$c" " BF BV BO "; then
@@ -218,23 +256,55 @@ tdx_build_rule() {
     fi
 }
 
+# Teradata's VARCHAR maximum for the record: 32000 characters when any column is UNICODE (JSON/XML
+# are, after OREPLACE), else 64000.
+tdx_varchar_max() {
+    local i
+    REPLY=64000
+    for ((i = 1; i <= NCOLS; i++)); do
+        if [[ ${C_ct[i]} == 2 ]] || tdx_in "${C_tc[i]}" " JN XM "; then REPLY=32000; fi
+    done
+}
+
 # Effective record limit: max_row_length capped so the record cast (+1 headroom) is a valid VARCHAR.
 tdx_row_limit() {
-    local i unicode=0 cap
-    for ((i = 1; i <= NCOLS; i++)); do
-        if [[ ${C_ct[i]} == 2 ]] || { tdx_in "${C_tc[i]}" " JN XM " && [[ $S_session_charset == UTF8 ]]; }; then unicode=1; fi
-    done
-    if ((unicode)); then cap=31999; else cap=63999; fi
+    local cap
+    tdx_varchar_max
+    cap=$((REPLY - 1))
     REPLY=$((S_max_row_length < cap ? S_max_row_length : cap))
 }
 
+# tdx_col_width I LIMIT -> REPLY: declared width of column I in the record (its longest value or
+# sentinel, at most LIMIT + 1; a longer value fails the record-length pre-check).
+tdx_col_width() {
+    local w=${R_max[$1]}
+    ((${#S_null_sentinel} > w)) && w=${#S_null_sentinel}
+    ((${#S_empty_sentinel} > w)) && w=${#S_empty_sentinel}
+    REPLY=$((w < $2 + 1 ? w : $2 + 1))
+}
+
+# tdx_record_width -> REPLY: declared width of the joined record expression (sum of column widths
+# and delimiters). Teradata rejects a || result wider than tdx_varchar_max (Failure 3798).
+tdx_record_width() {
+    local i limit total=0
+    tdx_row_limit
+    limit=$REPLY
+    for ((i = 1; i <= NCOLS; i++)); do
+        tdx_col_width "$i" "$limit"
+        total=$((total + REPLY))
+    done
+    REPLY=$((total + (NCOLS - 1) * ${#S_delimiter}))
+}
+
 tdx_record_sql() {
-    local i joined="" d
+    local i joined="" d limit
     d=$(tdx_sql_str "$S_delimiter")
+    tdx_row_limit
+    limit=$REPLY
     for ((i = 1; i <= NCOLS; i++)); do
         ((i > 1)) && joined+=" || $d || "
-        joined+="(${R_expr[i]})"
+        tdx_col_width "$i" "$limit"
+        joined+="CAST(${R_expr[i]} AS VARCHAR($REPLY))"
     done
-    tdx_row_limit
-    REPLY="CAST($joined AS VARCHAR($((REPLY + 1))))"
+    REPLY="CAST($joined AS VARCHAR($((limit + 1))))"
 }

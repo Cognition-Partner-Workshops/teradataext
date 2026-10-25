@@ -242,6 +242,24 @@ test_no_new_rows_keeps_watermark() {
     assert_eq "$WM1" "$(tt_state "$CDC" watermark)"
 }
 
+test_big_endian_tool_output() {
+    tt_env_new
+    tt_set_tables "mixed TDX_DB MIXED" "big TDX_DB BIG"
+    tt_run --env TDX_FAKE_ENDIAN=big
+    assert_rc 0 "$TDX_RC" "$TDX_OUT$TDX_ERR"
+    assert_eq 4 "$(tt_state "$MIXED" rows_exported)"
+    assert_eq 25 "$(tt_state "$BIG" rows_exported)"
+    tt_env_new
+    tt_set_tables "mixed TDX_DB MIXED"
+    tt_run --env TDX_FAKE_ENDIAN=big --env TDX_HOST_BE=1
+    assert_rc 0 "$TDX_RC" "big-endian host: $TDX_OUT$TDX_ERR"
+    tt_env_new
+    tt_set_tables "mixed TDX_DB MIXED"
+    tt_run --env TDX_HOST_BE=1
+    assert_rc 0 "$TDX_RC" "big-endian host, little-endian files: $TDX_OUT$TDX_ERR"
+    assert_eq 4 "$(tt_state "$MIXED" rows_exported)"
+}
+
 test_lob_over_limit_fails_table() {
     tt_env_new
     tt_set_tables "mixed TDX_DB MIXED" "lob TDX_DB LOB_BIG" "big TDX_DB BIG"

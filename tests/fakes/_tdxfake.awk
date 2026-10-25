@@ -218,12 +218,16 @@ function load_fixture(path,   line, n, f, K, k, cu, i, eq, fk) {
 
 function rec(r,   n) {
     n = length(r)
-    if (tool == "bteq") printf "REC\t%s", le16(n + 2)
+    if (tool == "bteq") printf "REC\t%s", u16(n + 2)
     else printf "REC\t"
-    printf "%s%s\\012\n", le16(n), pfmt(r)
+    printf "%s%s\\012\n", u16(n), pfmt(r)
     nrec++
 }
-function le16(n) { return sprintf("\\%03o\\%03o", n % 256, int(n / 256) % 256) }
+# uint16 in the fake's byte order (be=1: big-endian, as fexp/bteq write on AIX/Solaris SPARC)
+function u16(n) {
+    if (be) return sprintf("\\%03o\\%03o", int(n / 256) % 256, n % 256)
+    return sprintf("\\%03o\\%03o", n % 256, int(n / 256) % 256)
+}
 
 function request(body, have, path, sql,   key, kind, ci, cn, i, w, K, c, lst, nl, m, cols, gt, le, v, q, j) {
     pmarker(body)
@@ -242,6 +246,7 @@ function request(body, have, path, sql,   key, kind, ci, cn, i, w, K, c, lst, nl
         else ci = M["chunk"] + 0
     }
     printf "REQ\t%s\n", pfmt(key)
+    if ((v = sqlcheck(sql)) != "") { printf "SQLERR\t%s\n", pfmt(v); return }
     for (i = 1; i <= nfail; i++) {
         if (toupper(ftable[i]) != key) continue
         if (ftool[i] != "" && ftool[i] != tool) continue
@@ -299,6 +304,52 @@ function request(body, have, path, sql,   key, kind, ci, cn, i, w, K, c, lst, nl
     }
     printf "END\t%d\n", nrec
 }
+# ---- SQL shape checks (not a parser): "" if fine, else "<code>\t<message>" ----
+# Balanced parentheses; OREPLACE takes 2 or 3 arguments; an OREPLACE result is VARCHAR(8000)
+# UNICODE, so it must be bounded (CAST, TRANSLATE, OREPLACE) or measured (CHARACTER_LENGTH)
+# before anything else (e.g. ||) uses it. Strings, "identifiers" and comments are skipped.
+function sqlcheck(t,   u, L, p, c, j, d, w, fn, na, top) {
+    u = toupper(t); L = length(t); p = 1; d = 0; w = ""
+    split("", fn); split("", na)
+    while (p <= L) {
+        c = substr(t, p, 1)
+        if (c == "'" || c == "\"") {
+            j = p + 1
+            while (j <= L) {
+                if (substr(t, j, 1) == c) { if (substr(t, j + 1, 1) == c) { j += 2; continue } break }
+                j++
+            }
+            if (j > L) return "3760\tString not terminated before end of text"
+            p = j + 1; w = ""; continue
+        }
+        if (c == "/" && substr(t, p + 1, 1) == "*") {
+            j = index(substr(t, p + 2), "*/")
+            if (!j) return "3706\tSyntax error: unterminated comment"
+            p += j + 3; continue
+        }
+        if (isw(c)) {
+            j = p; while (j <= L && isw(substr(t, j, 1))) j++
+            w = substr(u, p, j - p); p = j; continue
+        }
+        if (c == "(") { d++; fn[d] = w; na[d] = 1 }
+        else if (c == ",") { if (d > 0) na[d]++ }
+        else if (c == ")") {
+            if (d == 0) return "3706\tSyntax error: unbalanced ')'"
+            if (fn[d] == "OREPLACE") {
+                if (na[d] < 2 || na[d] > 3) return "3706\tSyntax error: OREPLACE takes 2 or 3 arguments, got " na[d]
+                top = d > 1 ? fn[d - 1] : ""
+                if (top != "CAST" && top != "TRANSLATE" && top != "OREPLACE" && top != "CHARACTER_LENGTH")
+                    return "3798\tA column or character expression is larger than the max size (unbounded OREPLACE result)"
+            }
+            d--
+        }
+        if (!isws(c)) w = ""
+        p++
+    }
+    if (d > 0) return "3706\tSyntax error: expected ')'"
+    return ""
+}
+
 # first MIN(<word>) / MIN("<word>") in the SQL (case-insensitive)
 function minre(t,   u, p, q, j, w) {
     u = toupper(t)

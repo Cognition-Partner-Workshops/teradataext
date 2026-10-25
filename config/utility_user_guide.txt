@@ -572,6 +572,19 @@ Never lossy - the table fails (status failed, last_error set) instead of truncat
 a LOB value exceeds lob_max_length, a record exceeds max_row_length, a column type is
 unsupported, or a non-LATIN character column is exported with session_charset = ASCII.
 
+Numbers are always written without digit grouping (1025, not 1,025), whatever FORMAT the
+source column has. An unbounded NUMBER column is the exception: it is written as Teradata
+converts it, so check its formatting on the source (the meta file notes this).
+
+Teradata limits on the generated SQL:
+  * Text values are escaped with OREPLACE, which returns at most 8000 characters. A text
+    value (CHAR, VARCHAR, CLOB, JSON, XML) longer than 8000 characters after escaping
+    fails the table with Teradata error 9134.
+  * Each column is cast to its longest possible output (text: twice its length, at most
+    8000) and the columns are joined into one record. If these widths add up to more than
+    64000 characters (32000 for tables with UNICODE, JSON or XML columns), the table fails
+    before any export with "table too wide to export".
+
 Time zones: TIME/TIMESTAMP WITH TIME ZONE values are converted to UTC and written with a
 trailing Z; the metadata records source_timezone = per-value offset, converted to UTC.
 TIME and TIMESTAMP without time zone are written as stored (no conversion).
@@ -695,6 +708,16 @@ Teradata errors
   3807  Object '<name>' does not exist. Wrong database/table in source_tables.ini,
         missing access to the object, or logtable_database does not exist.
   2646  No more spool space. Chunk the table more (lower chunk_rows) or ask for spool.
+  3706  Syntax error. The generated SQL was rejected: report it with the work/ script,
+        the tool log and the Teradata release.
+  3798  A column or character expression is larger than the max size. The generated SQL
+        is wider than Teradata allows: report it as for 3706.
+  9134  Result exceeded maximum length (OREPLACE): a text value is longer than 8000
+        characters after escaping (section 14). Export the table through a view that
+        shortens or splits the column.
+  The run summary and audit log show the first numbered "*** Failure NNNN" (or
+  "*** Error NNNN") line from the tool output, not BTEQ notices such as
+  "*** Error messages now directed to STDOUT.".
 
 Table marked failed (exit 1)
   * "LOB value length ... exceeds lob_max_length" - raise lob_max_length (mind
@@ -702,6 +725,9 @@ Table marked failed (exit 1)
   * "record length ... exceeds max_row_length" - raise max_row_length if the tools and
     target allow it.
   * "unsupported type" - UDT/ARRAY/etc.: export through a view that casts the column.
+  * "table too wide to export" - the column widths add up to more than one Teradata
+    VARCHAR (section 14). Export the table in two views with fewer columns each, or
+    through a view that casts wide text columns shorter.
   * "bc is required for range chunks on this key" - install bc (section 2), or set
     chunk_column to an integer or DATE column.
   * non-LATIN column with ASCII - set session_charset = UTF8.

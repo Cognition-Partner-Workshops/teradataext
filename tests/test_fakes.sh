@@ -121,7 +121,7 @@ test_metadata_queries_bteq_layout() {
     assert_eq '\N|\N' "$(fk_parse bteq "$TDX_TMP/out6.raw")"
     assert_eq '50000|\N' "$(fk_parse bteq "$TDX_TMP/out7.raw")"
     assert_eq '20' "$(fk_parse bteq "$TDX_TMP/out8.raw")"
-    assert_eq 8 "$(printf '%s\n' "$FK_OUT" | grep -cF '*** Query completed. 1 rows found. 1 column returned.')"
+    assert_eq 8 "$(printf '%s\n' "$FK_OUT" | grep -cF '*** Query completed. One row found. One column returned.')"
     assert_contains "$FK_OUT" "*** Query completed. 8 rows found. 1 column returned."
 }
 
@@ -132,6 +132,32 @@ test_minmax_column_from_sql() {
     fk_run_tool bteq "$TDX_TMP/s"
     assert_rc 0 "$FK_RC" "$FK_OUT"
     assert_eq '1|25' "$(fk_parse bteq "$TDX_TMP/mm.raw")"
+}
+
+fk_sql() {   # fk_sql SQL -> FK_RC FK_OUT (one count request with the given SQL)
+    printf '%s\n' "$FK_LOGON" ".EXPORT DATA FILE=$TDX_TMP/sql.raw;" \
+        "/* TDX query=count db=TDX_DB table=BIG */ $1;" >"$TDX_TMP/s"
+    fk_run_tool bteq "$TDX_TMP/s"
+}
+
+test_sql_shape_checks() {
+    fk_setup
+    fk_sql "SELECT COALESCE(CAST(OREPLACE(OREPLACE(x, '\', '\\'), '|', '\|') AS VARCHAR(512)), '\N') FROM t"
+    assert_rc 0 "$FK_RC" "$FK_OUT"
+    fk_sql "SELECT 'a(' || \"b)\" /* ( */ FROM t"
+    assert_rc 0 "$FK_RC" "parentheses in strings, identifiers and comments are ignored: $FK_OUT"
+    fk_sql "SELECT COALESCE(OREPLACE(OREPLACE(x), '\', '\\'), '|', '\|'), '\N') FROM t"
+    assert_rc 8 "$FK_RC"
+    assert_contains "$FK_OUT" "*** Failure 3706 Syntax error: OREPLACE takes 2 or 3 arguments, got 1."
+    fk_sql "SELECT COALESCE(OREPLACE(OREPLACE(x, '\', '\\'), '|', '\|'), '\N') || '|' || y FROM t"
+    assert_rc 8 "$FK_RC"
+    assert_contains "$FK_OUT" "*** Failure 3798 A column or character expression is larger than the max size"
+    fk_sql "SELECT CAST(x AS VARCHAR(10) FROM t"
+    assert_contains "$FK_OUT" "*** Failure 3706 Syntax error: expected ')'."
+    rm -f "$TDX_TMP/sql.raw"
+    fk_sql "SELECT x) FROM t"
+    assert_contains "$FK_OUT" "*** Failure 3706 Syntax error: unbalanced ')'."
+    [ ! -s "$TDX_TMP/sql.raw" ] || tt_fail "no result written on failure"
 }
 
 test_field_escaping() {

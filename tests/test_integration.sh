@@ -242,6 +242,23 @@ test_no_new_rows_keeps_watermark() {
     assert_eq "$WM1" "$(tt_state "$CDC" watermark)"
 }
 
+test_failed_fexp_drops_its_logtable() {
+    tt_env_new
+    tt_set_tables "big TDX_DB BIG"
+    tt_config_set teradata logtable_database WORKDB
+    tt_fixture_add_failure table=TDX_DB.BIG tool=fexp query=export chunk=2 times=1 code=3798 "message=A column or character expression is larger than the max size"
+    tt_run
+    assert_rc 1 "$TDX_RC" "$TDX_OUT$TDX_ERR"
+    local d=$TDX_TMP/scripts lt drop
+    tt_fake_scripts "$d" >/dev/null
+    lt=$(grep -h '^.LOGTABLE' "$d"/*.fexp | sed -n 's/^.LOGTABLE \(.*\);$/\1/p' | sort -u)
+    drop=$(grep -h "^DROP TABLE" "$d"/*.bteq | sed "s/;$//")
+    assert_count 1 "$drop" "one failed FastExport -> one DROP TABLE"
+    case $lt in *"${drop#DROP TABLE }"*) ;; *) tt_fail "DROP TABLE does not name a FastExport log table: $drop / $lt" ;; esac
+    assert_contains "$drop" '"WORKDB".tdx_lt_'
+    assert_not_contains "$(cat "$TDX_ROOT"/work/*droplt*)" "$TD_PASS_TEST"
+}
+
 test_big_endian_tool_output() {
     tt_env_new
     tt_set_tables "mixed TDX_DB MIXED" "big TDX_DB BIG"

@@ -1,0 +1,5 @@
+.SET SESSION CHARSET 'ASCII';
+.LOGON tdfake.example.com/tdx_test_user,********
+DROP TABLE tdx_lt_<H>;
+.LOGOFF;
+.QUIT 0;

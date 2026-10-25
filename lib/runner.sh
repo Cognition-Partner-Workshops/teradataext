@@ -28,11 +28,23 @@ tdx_sql_stmt() {
     printf '%s' "$v"
 }
 
+# Best effort: drop the restart log table a failed FastExport leaves behind (every attempt has
+# its own name, so it would never be reused). Keeps TDX_TOOL_ERR/TDX_TOOL_SL of the failure.
+tdx_drop_logtable() {
+    local lt=$1 name=$2 err=$TDX_TOOL_ERR sl=$TDX_TOOL_SL s
+    s=".SET SESSION CHARSET '$S_session_charset';"$'\n'"$(tdx_logon_lines)"$'\n'
+    s+="DROP TABLE $lt;"$'\n'".LOGOFF;"$'\n'".QUIT 0;"$'\n'
+    tdx_run_tool bteq "$name.droplt" "$s" 1 || tdx_warn "$name: could not drop FastExport log table $lt; drop it by hand"
+    TDX_TOOL_ERR=$err
+    TDX_TOOL_SL=$sl
+}
+
 tdx_fexp_script() {
     local sql=$1 out=$2 sessions=$3 job_id=$4 lt h
     h=$(printf '%s' "$job_id" | tdx_sha256)
     lt="tdx_lt_${h:0:12}"
     [[ -n $S_logtable_database ]] && lt="$(tdx_sql_ident "$S_logtable_database").$lt"
+    TDX_FEXP_LT=$lt
     REPLY=".LOGTABLE $lt;"$'\n'"$(tdx_logon_lines)"$'\n'
     REPLY+=".BEGIN EXPORT SESSIONS $sessions TENACITY 0;"$'\n'
     REPLY+=".EXPORT OUTFILE $out FORMAT TEXT MODE RECORD;"$'\n'

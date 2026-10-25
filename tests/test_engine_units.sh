@@ -188,19 +188,20 @@ test_record_cast_stays_within_varchar_max() {
     tt_env_new
     tt_set_tables "mixed TDX_DB MIXED"
     tt_run_ok
-    assert_contains "$(ut_export_sql)" "AS VARCHAR(64000))" "latin columns: 64000 (63999 + 1 headroom)"
+    assert_contains "$(ut_export_sql)" "AS VARCHAR(64000) CHARACTER SET LATIN)" "latin columns: 64000 (63999 + 1 headroom)"
+    assert_contains "$(ut_export_sql)" " || TRANSLATE('|' USING UNICODE_TO_LATIN) || " "latin delimiter"
     tt_env_new types.fixture
     tt_set_tables "types TDX_DB TYPES"
     tt_config_set teradata session_charset UTF8
     tt_run_ok
-    assert_contains "$(ut_export_sql)" "AS VARCHAR(32000))" "unicode columns: 32000"
+    assert_contains "$(ut_export_sql)" "AS VARCHAR(32000) CHARACTER SET UNICODE)" "unicode columns: 32000"
     tt_env_new types.fixture
     tt_set_tables "types TDX_DB TYPES"
     tt_config_set teradata session_charset UTF8
     tt_config_set extract max_row_length 100
     tt_fixture_set TDX_DB.TYPES row_max 50
     tt_run
-    assert_contains "$(ut_export_sql)" "AS VARCHAR(101))" "max_row_length 100 -> 101"
+    assert_contains "$(ut_export_sql)" "AS VARCHAR(101) CHARACTER SET UNICODE)" "max_row_length 100 -> 101"
 }
 
 test_wrap_fields_keeps_identifier_spaces() {
@@ -245,7 +246,7 @@ test_multichar_decimal_quote_width() {
     tt_config_set format big_decimal_quote ab
     tt_run_ok
     # DECIMAL(38,4): up to 41 characters of numeric text plus two 2-character quotes
-    assert_contains "$(ut_export_sql)" "AS VARCHAR(41))) || 'ab' END AS VARCHAR(45))"
+    assert_contains "$(ut_export_sql)" "AS VARCHAR(41))) || 'ab' END AS VARCHAR(45) CHARACTER SET LATIN)"
 }
 
 test_export_text_and_timestamp_bounded() {
@@ -256,8 +257,8 @@ test_export_text_and_timestamp_bounded() {
     local sql
     sql=$(ut_export_sql)
     assert_contains "$sql" "ELSE TRANSLATE(OREPLACE(OREPLACE(OREPLACE(OREPLACE(TRIM(TRAILING FROM \"CH_L\")" "LATIN text back to LATIN"
-    assert_contains "$sql" "'0A'XC, '\' || '0A'XC) USING UNICODE_TO_LATIN) END AS VARCHAR(20))" "CHAR(10) LATIN -> 20"
-    assert_contains "$sql" "'0A'XC, '\' || '0A'XC) END AS VARCHAR(100))" "VARCHAR(50) UNICODE -> 100, no TRANSLATE"
+    assert_contains "$sql" "'0A'XC, '\' || '0A'XC) USING UNICODE_TO_LATIN) END AS VARCHAR(20) CHARACTER SET UNICODE)" "CHAR(10) LATIN -> 20"
+    assert_contains "$sql" "'0A'XC, '\' || '0A'XC) END AS VARCHAR(100) CHARACTER SET UNICODE)" "VARCHAR(50) UNICODE -> 100, no TRANSLATE"
     assert_contains "$sql" "SUBSTR(TRIM(CAST(CAST(\"TS0\" AS FORMAT 'YYYY-MM-DDBHH:MI:SS') AS VARCHAR(27))), 1, 10) || 'T' || "
     assert_not_contains "$sql" "OREPLACE(TRIM(CAST(CAST(" "timestamps do not use OREPLACE"
 }

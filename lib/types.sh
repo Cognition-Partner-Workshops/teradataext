@@ -296,15 +296,21 @@ tdx_record_width() {
     REPLY=$((total + (NCOLS - 1) * ${#S_delimiter}))
 }
 
+# Every || operand has an explicit character set: literals are UNICODE and functions such as
+# FROM_BYTES may return UNICODE, which would make the record UNICODE (32000 maximum, Failure 3798
+# on VARCHAR(64000)).
 tdx_record_sql() {
-    local i joined="" d limit
+    local i joined="" d limit cs=LATIN
+    tdx_varchar_max
+    ((REPLY < 64000)) && cs=UNICODE
     d=$(tdx_sql_str "$S_delimiter")
+    [[ $cs == LATIN ]] && d="TRANSLATE($d USING UNICODE_TO_LATIN)"
     tdx_row_limit
     limit=$REPLY
     for ((i = 1; i <= NCOLS; i++)); do
         ((i > 1)) && joined+=" || $d || "
         tdx_col_width "$i" "$limit"
-        joined+="CAST(${R_expr[i]} AS VARCHAR($REPLY))"
+        joined+="CAST(${R_expr[i]} AS VARCHAR($REPLY) CHARACTER SET $cs)"
     done
-    REPLY="CAST($joined AS VARCHAR($((limit + 1))))"
+    REPLY="CAST($joined AS VARCHAR($((limit + 1))) CHARACTER SET $cs)"
 }

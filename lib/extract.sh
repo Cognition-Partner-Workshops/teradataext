@@ -474,6 +474,7 @@ tdx_export_chunk() {
         if [[ $method == fexp ]]; then
             tdx_fexp_script "$sql" "$raw" "$sessions" "$job_id"
             tdx_run_tool fexp "$job" "$REPLY" "$sessions" && break
+            tdx_drop_logtable "$TDX_FEXP_LT" "$job"
         else
             tdx_bteq_script "$sql" "$raw"
             tdx_run_tool bteq "$job" "$REPLY" 1 && break

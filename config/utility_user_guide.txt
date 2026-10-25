@@ -92,6 +92,7 @@ Teradata user rights (logon user)
     metadata).
   * CREATE TABLE (and DROP TABLE) rights in logtable_database (or the user's default
     database when logtable_database is empty) for the FastExport restart log tables
+    (after a failed FastExport the utility drops its log table with BTEQ, best effort)
     tdx_lt_<hash> (<hash> = the first 12 hex digits of the SHA-256 of the job id; earlier
     versions used SHA-1, so the names differ from theirs).
   * Enough spool space for the largest export query / chunk.

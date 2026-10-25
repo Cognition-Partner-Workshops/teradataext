@@ -53,6 +53,8 @@ tdxf_log() {   # append one call record to $TDX_FAKE_LOG
 tdxf_report() {
     if [ "$TDXFAKE_TOOL" = fexp ]; then
         printf '**** 12:00:00 UTY8722 %s total records written to output file.\n' "$1"
+    elif [ "$1" -eq 1 ]; then
+        printf '*** Query completed. One row found. One column returned.\n'
     elif [ "$1" -gt 0 ]; then
         printf '*** Query completed. %s rows found. 1 column returned.\n' "$1"
     else
@@ -79,7 +81,9 @@ tdxf_main() {
         printf '*** Error: TDX_FAKE_FIXTURE is not set.\n'
         return "$exit_fail"
     fi
-    "$TDXFAKE_AWK" -v mode=plan -v tool="$TDXFAKE_TOOL" -v fixture="$TDX_FAKE_FIXTURE" \
+    local be=0
+    [ "${TDX_FAKE_ENDIAN:-}" = big ] && be=1
+    "$TDXFAKE_AWK" -v mode=plan -v tool="$TDXFAKE_TOOL" -v be="$be" -v fixture="$TDX_FAKE_FIXTURE" \
         -v script="$TDXFAKE_SCRIPT" -f "$TDXFAKE_DIR/_tdxfake.awk" >"$TDXFAKE_PLAN" || return "$exit_fail"
     while IFS= read -r line; do
         f=${line%%$'\t'*}; rest=${line#*$'\t'}

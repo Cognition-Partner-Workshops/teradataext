@@ -22,8 +22,8 @@ ut_rec() {   # ut_rec fexp|bteq|reclen|bare PAYLOAD -> one raw record on stdout
     ut_le16 "$n"; printf '%s' "$2"
     case $1 in fexp|bteq) printf '\n' ;; esac
 }
-ut_decode() {   # ut_decode RAW REC_PREFIX EOR [WANT] [LIMIT] [UTF8] -> status line; records in $RAW.dat
-    od -An -v -tu1 "$1" | tt_awk -v rec_prefix="$2" -v eor="$3" -v want="${4:-1}" -v limit="${5:-64000}" \
+ut_decode() {   # ut_decode RAW REC_PREFIX EOR [WANT] [LIMIT] [UTF8] [BE] -> status line; records in $RAW.dat
+    od -An -v -tu1 "$1" | tt_awk -v rec_prefix="$2" -v eor="$3" -v be="${7:-0}" -v want="${4:-1}" -v limit="${5:-64000}" \
         -v utf8="${6:-0}" -v delim=124 -v esc=92 -v out="$1.dat" -f "$TDX_REPO_ROOT/lib/rawdecode.awk"
 }
 
@@ -46,6 +46,19 @@ test_stream_raw_export_layouts() {
     for r in 'abc' 'de'; do ut_rec fexp "$r"; done >"$raw"
     case $(ut_decode "$raw" 1 1) in OK*) tt_fail "fexp data, bteq layout must not decode";; esac
     case $(ut_decode "$raw" 0 0) in OK*) tt_fail "fexp data, bare layout must not decode";; esac
+}
+
+test_stream_raw_export_big_endian() {
+    ut_need_file lib/rawdecode.awk
+    local raw=$TDX_TEST_TMP/x.raw
+    # BTEQ 17.20 on AIX: "\0 037 \0 035 1,025|..." = record_len 31, varchar_len 29, big-endian
+    printf '\000\005\000\003252\n\000\024\000\022P|N|1|PRODUCT_CODE\n' >"$raw"
+    assert_eq "OK 2" "$(ut_decode "$raw" 1 1 0 0 0 1)" "big-endian bteq layout"
+    printf '%s\n' 252 'P|N|1|PRODUCT_CODE' >"$TDX_TEST_TMP/expected"
+    assert_files_equal "$TDX_TEST_TMP/expected" "$raw.dat"
+    case $(ut_decode "$raw" 1 1 0 0 0 0) in OK*) tt_fail "big-endian data must not decode as little-endian";; esac
+    printf '\000\003abc\n\000\002de\n' >"$raw"
+    assert_eq "OK 2" "$(ut_decode "$raw" 0 1 0 0 0 1)" "big-endian fexp layout"
 }
 
 test_stream_raw_export_rejects_garbage() {
@@ -132,6 +145,15 @@ test_tool_log_modes() {
     assert_eq "exit code 12" "$(printf '' | tdx_tool_error_summary none 12)"
 }
 
+test_tool_row_count_lines() {
+    local f=$TDX_TEST_TMP/body l
+    for l in "*** Query completed. One row found. One column returned.:1" \
+        "*** Query completed. 12 rows found. 1 column returned.:12" "*** Query completed. No rows found.:0"; do
+        assert_contains "$(printf '%s\n' "${l%:*}" | tt_awk -v mode=masked -v body="$f" \
+            -f "$TDX_REPO_ROOT/lib/maskfn.awk" -f "$TDX_REPO_ROOT/lib/toolout.awk")" "bteq_rows=${l##*:}" "$l"
+    done
+}
+
 test_tool_error_prefers_numbered_failure() {
     ut_need_fn tdx_tool_error_summary
     local out=$'*** Error messages now directed to STDOUT.\n*** Logon successfully completed.\n'
@@ -188,7 +210,7 @@ test_wrap_fields_keeps_identifier_spaces() {
     local d=$TDX_TMP/scripts sql
     tt_fake_scripts "$d" >/dev/null
     sql=$(cat "$d"/* | grep -F '/* TDX query=columns')
-    assert_contains "$sql" "TRIM(CAST(ColumnId"
+    assert_contains "$sql" "TRIM(CAST(CAST(CAST(ColumnId AS BIGINT)"
     assert_not_contains "$sql" "TRIM(CAST(ColumnName"
 }
 
@@ -199,7 +221,22 @@ test_metadata_fields_bounded_after_oreplace() {
     local d=$TDX_TMP/scripts sql
     tt_fake_scripts "$d" >/dev/null
     sql=$(cat "$d"/* | grep -F '/* TDX query=columns')
-    assert_contains "$sql" "COALESCE(CAST(OREPLACE(OREPLACE(TRIM(CAST(ColumnId AS VARCHAR(256))), '\\', '\\\\'), '|', '\\|') AS VARCHAR(512)), '\\N')"
+    assert_contains "$sql" "COALESCE(CAST(OREPLACE(OREPLACE(TRIM(CAST(CAST(CAST(ColumnId AS BIGINT) AS FORMAT '-(19)9') AS VARCHAR(256))), '\\', '\\\\'), '|', '\\|') AS VARCHAR(512)), '\\N')"
+}
+
+test_numbers_without_digit_grouping() {
+    tt_env_new
+    tt_set_tables "mixed TDX_DB MIXED" "big TDX_DB BIG" "cdc TDX_DB CDC cdc_column=UPDATED_TS"
+    tt_run_ok
+    local d=$TDX_TMP/scripts all
+    tt_fake_scripts "$d" >/dev/null
+    all=$(cat "$d"/*)
+    assert_contains "$all" "COALESCE(CAST(OREPLACE(OREPLACE(TRIM(CAST(CAST(CAST(ColumnId AS BIGINT) AS FORMAT '-(19)9') AS VARCHAR(256)))"
+    assert_contains "$all" "CAST(CAST(ColumnPosition AS BIGINT) AS FORMAT '-(19)9')"
+    assert_contains "$all" "TRIM(CAST(CAST(\"ID\" AS FORMAT '-(10)9') AS VARCHAR(25)))" "INTEGER export"
+    assert_contains "$all" "TRIM(CAST(CAST(\"AMT\" AS FORMAT '-(8)9.9(2)') AS VARCHAR(13)))" "DECIMAL(10,2) export"
+    assert_contains "$all" "CAST(MIN(\"ID\") AS FORMAT '-(10)9')" "minmax"
+    assert_not_contains "$all" "TRIM(CAST(ColumnId AS VARCHAR(256)))"
 }
 
 test_export_text_and_timestamp_bounded() {

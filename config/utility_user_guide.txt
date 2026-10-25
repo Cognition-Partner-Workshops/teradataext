@@ -572,6 +572,10 @@ Never lossy - the table fails (status failed, last_error set) instead of truncat
 a LOB value exceeds lob_max_length, a record exceeds max_row_length, a column type is
 unsupported, or a non-LATIN character column is exported with session_charset = ASCII.
 
+Numbers are always written without digit grouping (1025, not 1,025), whatever FORMAT the
+source column has. An unbounded NUMBER column is the exception: it is written as Teradata
+converts it, so check its formatting on the source (the meta file notes this).
+
 Teradata limits on the generated SQL:
   * Text values are escaped with OREPLACE, which returns at most 8000 characters. A text
     value (CHAR, VARCHAR, CLOB, JSON, XML) longer than 8000 characters after escaping

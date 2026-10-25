@@ -121,7 +121,7 @@ test_metadata_queries_bteq_layout() {
     assert_eq '\N|\N' "$(fk_parse bteq "$TDX_TMP/out6.raw")"
     assert_eq '50000|\N' "$(fk_parse bteq "$TDX_TMP/out7.raw")"
     assert_eq '20' "$(fk_parse bteq "$TDX_TMP/out8.raw")"
-    assert_eq 8 "$(printf '%s\n' "$FK_OUT" | grep -cF '*** Query completed. 1 rows found. 1 column returned.')"
+    assert_eq 8 "$(printf '%s\n' "$FK_OUT" | grep -cF '*** Query completed. One row found. One column returned.')"
     assert_contains "$FK_OUT" "*** Query completed. 8 rows found. 1 column returned."
 }
 

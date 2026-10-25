@@ -74,6 +74,31 @@ tdx_text_value() {
 # tdx_esc_max CHARS -> REPLY: longest escaped value (every character escaped, OREPLACE limit)
 tdx_esc_max() { REPLY=$((2 * $1 < TDX_OREPLACE_MAX ? 2 * $1 : TDX_OREPLACE_MAX)); }
 
+# tdx_num_format TC P S -> REPLY: explicit FORMAT for an integer/bounded decimal ("" otherwise).
+# Without it, numbers are converted with the column's own FORMAT, which may group digits (1,025).
+tdx_num_format() {
+    REPLY=""
+    case $1 in
+        I1) REPLY='-(3)9' ;;
+        I2) REPLY='-(5)9' ;;
+        I) REPLY='-(10)9' ;;
+        I8) REPLY='-(19)9' ;;
+        D | N)
+            if (($2 > 0 && $2 <= 38 && $3 >= 0 && $3 <= $2)); then
+                REPLY="-($(($2 - $3 > 1 ? $2 - $3 : 1)))9"
+                (($3)) && REPLY+=".9($3)"
+            fi
+            ;;
+    esac
+}
+
+# tdx_num_text EXPR TC P S -> REPLY: EXPR cast to its explicit FORMAT (unchanged when none applies)
+tdx_num_text() {
+    local e=$1
+    tdx_num_format "$2" "${3:-0}" "${4:-0}"
+    if [[ -n $REPLY ]]; then REPLY="CAST($e AS FORMAT '$REPLY')"; else REPLY=$e; fi
+}
+
 tdx_plain_value() { REPLY="CASE WHEN $1 IS NULL THEN $(tdx_sql_str "$S_null_sentinel") ELSE $2 END"; }
 
 tdx_dt_format() {
@@ -99,15 +124,16 @@ tdx_build_rule() {
     q=$(tdx_sql_ident "${C_name[i]}")
     if [[ -n ${TDX_INT_TYPES[$c]+x} ]]; then
         tdx_rule "$i" int_text "${TDX_INT_TYPES[$c]}" 20 0 0 ""
-        tdx_plain_value "$q" "TRIM(CAST($q AS VARCHAR(25)))"
+        tdx_num_format "$c"
+        tdx_plain_value "$q" "TRIM(CAST(CAST($q AS FORMAT '$REPLY') AS VARCHAR(25)))"
         R_expr[i]=$REPLY
     elif [[ $c == D || $c == N ]]; then
         local bounded=0 big=0 fmt rs width notes=""
         ((p > 0 && p <= 38 && sc >= 0 && sc <= p)) && bounded=1
         ((bounded == 0 || p > S_big_decimal_threshold)) && big=1
         if ((bounded)); then
-            fmt="-($((p - sc > 1 ? p - sc : 1)))9"
-            ((sc)) && fmt+=".9($sc)"
+            tdx_num_format "$c" "$p" "$sc"
+            fmt=$REPLY
             text="TRIM(CAST(CAST($q AS FORMAT '$fmt') AS VARCHAR($((p + 3)))))"
             rs="DECIMAL($p,$sc)"
             width=$((p + 3))

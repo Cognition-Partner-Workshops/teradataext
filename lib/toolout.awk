@@ -53,6 +53,7 @@ function pystrip(s) { sub(/^[ \t\r\f\v]+/, "", s); sub(/[ \t\r\f\v]+$/, "", s); 
         if (v ~ /^no/) bteq_rows = 0
         else { sub(/[ \t].*/, "", v); gsub(/,/, "", v); bteq_rows = v + 0 }
     }
+    if (lraw ~ /query completed\.[ \t]+one[ \t]+row[ \t]+found/) bteq_rows = 1
     if (raw ~ /\*\*\* (Failure|Error) [0-9]/) bteq_fail = 1
     scan_codes(raw, 3, 5)
     for (i = 1; i <= np; i++) if (pats[i] != "" && index(lraw, pats[i])) sl = 1

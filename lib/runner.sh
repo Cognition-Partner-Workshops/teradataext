@@ -174,10 +174,22 @@ tdx_run_tool() {
 # Byte value of a single character.
 tdx_byte() { LC_ALL=C printf '%d' "'$1"; }
 
+# 1 when this host stores integers big-endian (AIX, Solaris SPARC); fexp/bteq write the record
+# and VARCHAR lengths in the host's byte order. TDX_HOST_BE may be preset (tests).
+tdx_host_be() {
+    local v
+    if [[ -z ${TDX_HOST_BE:-} ]]; then
+        v=$(printf '\001\000' | od -An -tu2)
+        v=${v//[[:space:]]/}
+        if [[ $v == 256 ]]; then TDX_HOST_BE=1; else TDX_HOST_BE=0; fi
+    fi
+    REPLY=$TDX_HOST_BE
+}
+
 # tdx_decode_raw RAW OUT TOOL WANT LIMIT UTF8 DELIM ESC
 # 0: decoded (TDX_DEC_N records, TDX_DEC_LAYOUT); 1: no layout fits; 2: record error (TDX_DEC_ERR).
 tdx_decode_raw() {
-    local raw=$1 out=$2 tool=$3 want=$4 limit=$5 utf8=$6 delim=$7 esc=$8 res lay rp eor p
+    local raw=$1 out=$2 tool=$3 want=$4 limit=$5 utf8=$6 delim=$7 esc=$8 res lay rp eor be p
     TDX_DEC_N=0
     TDX_DEC_LAYOUT=""
     TDX_DEC_ERR=""
@@ -188,11 +200,14 @@ tdx_decode_raw() {
     fi
     local -a order
     if [[ $tool == bteq ]]; then order=(11 01 10 00); else order=(01 11 10 00); fi
+    tdx_host_be
+    order=("${order[@]/%/$REPLY}" "${order[@]/%/$((1 - REPLY))}")
     res="$TDX_RUNDIR/dec.${BASHPID:-$$}.$RANDOM"
     for lay in "${order[@]}"; do
         rp=${lay:0:1}
         eor=${lay:1:1}
-        od -An -v -tu1 "$raw" | tdx_awk -v rec_prefix="$rp" -v eor="$eor" -v want="$want" -v limit="$limit" \
+        be=${lay:2:1}
+        od -An -v -tu1 "$raw" | tdx_awk -v rec_prefix="$rp" -v eor="$eor" -v be="$be" -v want="$want" -v limit="$limit" \
             -v utf8="$utf8" -v delim="$delim" -v esc="$esc" -v out="$out" -f "$TDX_LIB/rawdecode.awk" >"$res" &
         p=$!
         TDX_CHILD_PIDS=$p
@@ -207,6 +222,7 @@ tdx_decode_raw() {
                 [[ $rp == 1 ]] && TDX_DEC_LAYOUT="reclen+"
                 TDX_DEC_LAYOUT+="varchar"
                 [[ $eor == 1 ]] && TDX_DEC_LAYOUT+="+eor"
+                [[ $be == 1 ]] && TDX_DEC_LAYOUT+="+big-endian"
                 return 0
                 ;;
             ERROR)

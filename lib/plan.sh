@@ -15,6 +15,10 @@ tdx_wrap_fields() {
     REPLY=$out
 }
 
+# tdx_meta_int EXPR -> REPLY: an integer metadata value without digit grouping (DBC formats
+# ColumnId as 1,025).
+tdx_meta_int() { REPLY="CAST(CAST($1 AS BIGINT) AS FORMAT '-(19)9')"; }
+
 # tdx_marker KIND KEY [name value]... -> REPLY
 tdx_marker() {
     local kind=$1 key=$2 out k v
@@ -85,7 +89,7 @@ tdx_cdc_max_sql() {
     case $1 in
         DA) REPLY="CAST(CAST(MAX($REPLY) AS FORMAT 'YYYY-MM-DD') AS CHAR(10))" ;;
         TS | SZ) REPLY="CAST(CAST(CAST(MAX($REPLY) AS TIMESTAMP(6)) AS FORMAT 'YYYY-MM-DDBHH:MI:SS.S(6)') AS CHAR(26))" ;;
-        *) REPLY="MAX($REPLY)" ;;
+        *) tdx_num_text "MAX($REPLY)" "$1" "$3" "$4" ;;
     esac
 }
 

@@ -29,12 +29,14 @@ is handled with `LC_ALL=C`; binary bytes are written with `printf` octal escapes
    UNICODE` result would otherwise widen the record). This is not a SQL parser.
 
 Every result row is a single string: fields are joined with `|`, NULL is `\N`, and `\`, `|`, CR and
-LF are escaped with a preceding `\`. Layouts (uint16 little-endian):
+LF are escaped with a preceding `\`. Layouts (uint16 little-endian; big-endian, as on AIX/Solaris
+SPARC, when `TDX_FAKE_ENDIAN=big`):
 
 * fexp (`FORMAT TEXT`): `varchar_len, payload, 0x0A`; prints
   `**** 12:00:00 UTY8722 <N> total records written to output file.` per request.
 * bteq (`.EXPORT DATA`): `record_len (= varchar_len + 2), varchar_len, payload, 0x0A`; prints
-  `*** Query completed. <N> rows found. 1 column returned.` or `*** Query completed. No rows found.`
+  `*** Query completed. <N> rows found. 1 column returned.`, `*** Query completed. One row found. One column
+  returned.` (N = 1, as BTEQ 17.20 prints it) or `*** Query completed. No rows found.`
 
 | query | answer |
 |---|---|

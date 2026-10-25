@@ -218,12 +218,16 @@ function load_fixture(path,   line, n, f, K, k, cu, i, eq, fk) {
 
 function rec(r,   n) {
     n = length(r)
-    if (tool == "bteq") printf "REC\t%s", le16(n + 2)
+    if (tool == "bteq") printf "REC\t%s", u16(n + 2)
     else printf "REC\t"
-    printf "%s%s\\012\n", le16(n), pfmt(r)
+    printf "%s%s\\012\n", u16(n), pfmt(r)
     nrec++
 }
-function le16(n) { return sprintf("\\%03o\\%03o", n % 256, int(n / 256) % 256) }
+# uint16 in the fake's byte order (be=1: big-endian, as fexp/bteq write on AIX/Solaris SPARC)
+function u16(n) {
+    if (be) return sprintf("\\%03o\\%03o", int(n / 256) % 256, n % 256)
+    return sprintf("\\%03o\\%03o", n % 256, int(n / 256) % 256)
+}
 
 function request(body, have, path, sql,   key, kind, ci, cn, i, w, K, c, lst, nl, m, cols, gt, le, v, q, j) {
     pmarker(body)

@@ -233,7 +233,11 @@ binaries can identify the request:
 Values never contain `*/`; values with spaces are double-quoted.
 
 Every query returns a **single VARCHAR column** per row; fields inside it are joined with
-`|`, NULL is `\N`, and `\`, `|`, CR, LF inside values are prefixed with `\`. Each field is
+`|`, NULL is `\N`, and `\`, `|`, CR, LF inside values are prefixed with `\`. Integer metadata
+(`ColumnId`, `ColumnLength`, digits, `ColumnPosition`, `RowCount`) is
+`CAST(CAST(x AS BIGINT) AS FORMAT '-(19)9')`, and min/max/cdcmax of integer and bounded
+decimal columns use the same explicit FORMAT as the export (below): Teradata converts a number
+to text with the column's FORMAT, which may group digits (`1,025`). Each field is
 `CAST(... AS VARCHAR(256))`, escaped with `OREPLACE`, then `CAST(... AS VARCHAR(512))`.
 
 SQL width rules (Teradata documentation): `OREPLACE` with literal search/replace arguments
@@ -281,7 +285,8 @@ FastExport script shape:
 
 ### Raw export layouts (decoded by lib/rawdecode.awk into the final .dat file)
 
-All lengths are unsigned 16-bit little-endian.
+All lengths are unsigned 16-bit integers in the host's byte order: little-endian on Linux x86,
+big-endian on AIX and Solaris SPARC. The decoder tries the host's order first, then the other.
 
 * FastExport `FORMAT TEXT` with one VARCHAR column: `varchar_len, payload, 0x0A` per record.
 * BTEQ `.EXPORT DATA`: `record_len (= varchar_len + 2), varchar_len, payload, 0x0A` per record.
@@ -292,7 +297,7 @@ fails the job if no layout fits. The raw file is `<final>.raw`, removed after co
 
 Row counts: records parsed from the raw file are authoritative. When the tool output contains
 `<N> total records written` (FastExport) or `Query completed. <N> rows found` /
-`Query completed. No rows found` (BTEQ) the numbers must match, otherwise the job fails.
+`Query completed. One row found` / `Query completed. No rows found` (BTEQ) the numbers must match, otherwise the job fails.
 
 Errors: a job fails when the tool exits non-zero. It is a **session-limit failure** when the
 output contains `Failure <code>` / `Error <code>` with a code in `session_limit_errors`, or any
@@ -344,7 +349,9 @@ LATIN text is translated back to LATIN after `OREPLACE`; JSON/XML stay UNICODE, 
 with a JSON/XML column has the 32000 UNICODE record maximum. If the column widths add up to
 more than the record VARCHAR maximum (64000 LATIN / 32000 UNICODE), the table fails before
 any export with "table too wide to export". TIMESTAMP values get their `T` separator from
-`SUBSTR`, not `OREPLACE`.
+`SUBSTR`, not `OREPLACE`. Integers are exported with their type's default FORMAT
+(`-(3)9`, `-(5)9`, `-(10)9`, `-(19)9`) and bounded decimals with `-(p-s)9.9(s)`, never the
+column's own FORMAT. An unbounded NUMBER is cast without a FORMAT.
 
 ## 9. `metadata/<db>_<table>.meta.ini`
 

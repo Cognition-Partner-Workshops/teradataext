@@ -332,7 +332,8 @@ data, not a record end. NULL = `\N`. Zero-length string/binary value = `\E`.
 | CHAR (CF) | escaped_text | trimmed per `char_trim`, escaped | CHAR(n)/VARCHAR(n*4) for UNICODE |
 | VARCHAR (CV) | escaped_text | escaped | VARCHAR(n) (x4 for UNICODE, max 65535) |
 | CLOB (CO), JSON (JN), XML (XM) | escaped_text | CAST/XMLSERIALIZE to VARCHAR(lob_max_length) after a MAX length pre-check, escaped | VARCHAR(65535) |
-| BYTE (BF), VARBYTE (BV), BLOB (BO) | hex | `FROM_BYTES(...,'base16')`, BLOB after a length pre-check | VARBYTE(n) |
+| BYTE (BF), VARBYTE (BV) | hex_dash | `FROM_BYTES(...,'base16')` with `-` between bytes (`31-35-00`); table fails if 3n-1 > 200 (n > 67 bytes) | VARCHAR(200) |
+| BLOB (BO) | hex | `FROM_BYTES(...,'base16')` after a length pre-check | VARBYTE(n) |
 | anything else (UDT, ARRAY, ...) | unsupported | table fails (never lossy) | |
 
 Never lossy: a table fails (status `failed`, `last_error` set) instead of truncating when a
@@ -340,11 +341,12 @@ LOB value exceeds `lob_max_length`, a record would exceed `max_row_length`, a co
 unsupported, or a non-LATIN character column is exported with `session_charset = ASCII`.
 LOB tables always use BTEQ EXPORT.
 
-Export record SQL: each column expression is `CAST(... AS VARCHAR(w) CHARACTER SET cs)`, where
+Export record SQL: each column expression is `CAST(... AS VARCHAR(w))`, where
 `w` is the column's longest possible output (or sentinel), capped at the record limit + 1; the
-columns are joined with the delimiter and the record is cast to `VARCHAR(limit + 1) CHARACTER SET
-cs`. `cs` is UNICODE for tables with UNICODE/JSON/XML columns, else LATIN, and the delimiter is
-then `TRANSLATE('|' USING UNICODE_TO_LATIN)`: literals and functions such as `FROM_BYTES` may
+columns are joined with the delimiter and the record is cast to `VARCHAR(limit + 1)`. For tables
+without UNICODE/JSON/XML columns every column is `CAST(TRANSLATE(... USING UNICODE_TO_LATIN) AS
+VARCHAR(w))` and the delimiter `TRANSLATE('|' USING UNICODE_TO_LATIN)` (CAST cannot change the
+character set: Failure 5355): literals and functions such as `FROM_BYTES` may
 return UNICODE, and one UNICODE operand makes the whole record UNICODE (32000 maximum). Text columns
 count `2 * length` (every character escaped), at most 8000 (the `OREPLACE` limit); a text
 value longer than 8000 characters after escaping fails the table with Teradata error 9134.

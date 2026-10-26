@@ -193,20 +193,22 @@ test_record_cast_stays_within_varchar_max() {
     tt_env_new
     tt_set_tables "mixed TDX_DB MIXED"
     tt_run_ok
-    assert_contains "$(ut_export_sql)" "AS VARCHAR(64000) CHARACTER SET LATIN)" "latin columns: 64000 (63999 + 1 headroom)"
+    assert_contains "$(ut_export_sql)" "AS VARCHAR(64000))" "latin columns: 64000 (63999 + 1 headroom)"
+    assert_contains "$(ut_export_sql)" "SELECT CAST(CAST(TRANSLATE(CASE WHEN \"ID\" IS NULL" "latin record: each column TRANSLATEd"
+    assert_not_contains "$(ut_export_sql)" "CHARACTER SET" "CAST cannot change the character set (5355)"
     assert_contains "$(ut_export_sql)" " || TRANSLATE('|' USING UNICODE_TO_LATIN) || " "latin delimiter"
     tt_env_new types.fixture
     tt_set_tables "types TDX_DB TYPES"
     tt_config_set teradata session_charset UTF8
     tt_run_ok
-    assert_contains "$(ut_export_sql)" "AS VARCHAR(32000) CHARACTER SET UNICODE)" "unicode columns: 32000"
+    assert_contains "$(ut_export_sql)" "AS VARCHAR(32000))" "unicode columns: 32000"
     tt_env_new types.fixture
     tt_set_tables "types TDX_DB TYPES"
     tt_config_set teradata session_charset UTF8
     tt_config_set extract max_row_length 100
     tt_fixture_set TDX_DB.TYPES row_max 50
     tt_run
-    assert_contains "$(ut_export_sql)" "AS VARCHAR(101) CHARACTER SET UNICODE)" "max_row_length 100 -> 101"
+    assert_contains "$(ut_export_sql)" "AS VARCHAR(101))" "max_row_length 100 -> 101"
 }
 
 test_wrap_fields_keeps_identifier_spaces() {
@@ -251,7 +253,7 @@ test_multichar_decimal_quote_width() {
     tt_config_set format big_decimal_quote ab
     tt_run_ok
     # DECIMAL(38,4): up to 41 characters of numeric text plus two 2-character quotes
-    assert_contains "$(ut_export_sql)" "AS VARCHAR(41))) || 'ab' END AS VARCHAR(45) CHARACTER SET LATIN)"
+    assert_contains "$(ut_export_sql)" "AS VARCHAR(41))) || 'ab' END USING UNICODE_TO_LATIN) AS VARCHAR(45))"
 }
 
 test_export_text_and_timestamp_bounded() {
@@ -262,8 +264,8 @@ test_export_text_and_timestamp_bounded() {
     local sql
     sql=$(ut_export_sql)
     assert_contains "$sql" "ELSE TRANSLATE(OREPLACE(OREPLACE(OREPLACE(OREPLACE(OREPLACE(TRIM(TRAILING FROM \"CH_L\"), '00'XC, '')" "LATIN text back to LATIN"
-    assert_contains "$sql" "'0A'XC, '\' || '0A'XC) USING UNICODE_TO_LATIN) END AS VARCHAR(20) CHARACTER SET UNICODE)" "CHAR(10) LATIN -> 20"
-    assert_contains "$sql" "'0A'XC, '\' || '0A'XC) END AS VARCHAR(100) CHARACTER SET UNICODE)" "VARCHAR(50) UNICODE -> 100, no TRANSLATE"
+    assert_contains "$sql" "'0A'XC, '\' || '0A'XC) USING UNICODE_TO_LATIN) END AS VARCHAR(20))" "CHAR(10) LATIN -> 20"
+    assert_contains "$sql" "'0A'XC, '\' || '0A'XC) END AS VARCHAR(100))" "VARCHAR(50) UNICODE -> 100, no TRANSLATE"
     assert_contains "$sql" "SUBSTR(TRIM(CAST(CAST(\"TS0\" AS FORMAT 'YYYY-MM-DDBHH:MI:SS') AS VARCHAR(27))), 1, 10) || 'T' || "
     assert_not_contains "$sql" "OREPLACE(TRIM(CAST(CAST(" "timestamps do not use OREPLACE"
     assert_contains "$sql" "OREPLACE(OREPLACE(\"VC_U\", '00'XC, ''), '\\', '\\\\')" "NUL bytes removed first"
@@ -322,6 +324,24 @@ test_interrupted_cleanup_resumes_from_recorded_zip() {
     assert_eq done "$(tt_state "$key" status)"
     assert_eq "$z $sha" "$(tt_state "$key" zip_file) $(tt_state "$key" zip_sha256)"
     assert_empty "$(tt_requests export)"
+}
+
+test_binary_dash_hex() {
+    ut_need_fn tdx_build_rule
+    S_null_sentinel='\N' S_empty_sentinel='\E'
+    C_tc[1]=BV C_len[1]=67 C_name[1]=HEX_REV_TYPE
+    tdx_build_rule 1
+    assert_eq hex_dash "${R_enc[1]}" "VARBYTE(67) fits"
+    assert_eq "VARCHAR(200)" "${R_rs[1]}"
+    assert_eq 200 "${R_max[1]}"
+    assert_contains "${R_expr[1]}" "TRIM(TRAILING '-' FROM REGEXP_REPLACE(FROM_BYTES(\"HEX_REV_TYPE\", 'base16'), '([0-9A-F]{2})', '\1-', 1, 0, 'c'))"
+    C_tc[1]=BF C_len[1]=1
+    tdx_build_rule 1
+    assert_eq 2 "${R_max[1]}" "BYTE(1): two hex digits, no dash"
+    C_tc[1]=BV C_len[1]=68
+    tdx_build_rule 1
+    assert_eq unsupported "${R_enc[1]}" "VARBYTE(68) needs 203 characters"
+    assert_contains "${R_notes[1]}" "at most 67 bytes"
 }
 
 ut_run_failing() {   # ut_run_failing MODE -> UT_LOGS (all *.fexp.log / *.bteq.log)

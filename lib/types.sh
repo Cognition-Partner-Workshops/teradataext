@@ -23,6 +23,7 @@ TDX_CDC_TYPES=" I1 I2 I I8 D N DA TS SZ "
 # when a result would be longer.
 TDX_OREPLACE_MAX=8000
 # Text values: NUL (0x00) bytes are removed in SQL (portable awk cannot write them).
+TDX_BIN_TEXT_MAX=200
 TDX_NUL_NOTE="NUL (0x00) bytes removed"
 
 tdx_in() { [[ $2 == *" $1 "* ]]; }
@@ -245,7 +246,18 @@ tdx_build_rule() {
         R_expr[i]=$REPLY
         R_notes[i]=$TDX_NUL_NOTE
         [[ $c == CF && $S_char_trim != none ]] && R_notes[i]+="; CHAR padding trimmed ($S_char_trim)"
-    elif tdx_in "$c" " BF BV BO "; then
+    elif tdx_in "$c" " BF BV "; then
+        local n=${C_len[i]} w out
+        w=$((3 * (n > 1 ? n : 1) - 1))
+        if ((w > TDX_BIN_TEXT_MAX)); then
+            tdx_rule "$i" unsupported "" 0 0 0 "BYTE/VARBYTE($n) needs $w characters as dash-separated hex; VARCHAR($TDX_BIN_TEXT_MAX) holds at most $(((TDX_BIN_TEXT_MAX + 1) / 3)) bytes"
+            return
+        fi
+        tdx_rule "$i" hex_dash "VARCHAR($TDX_BIN_TEXT_MAX)" "$w" 0 1 "hex bytes separated by '-'"
+        out="CASE WHEN $q IS NULL THEN $(tdx_sql_str "$S_null_sentinel")"
+        [[ -n $S_empty_sentinel ]] && out+=" WHEN BYTES($q) = 0 THEN $(tdx_sql_str "$S_empty_sentinel")"
+        R_expr[i]="$out ELSE TRIM(TRAILING '-' FROM REGEXP_REPLACE(FROM_BYTES($q, 'base16'), '([0-9A-F]{2})', '\\1-', 1, 0, 'c')) END"
+    elif [[ $c == BO ]]; then
         local n src lob=0 vb
         if [[ $c == BO ]]; then n=$S_lob_max_length; src="CAST($q AS VARBYTE($n))"; lob=1; else n=${C_len[i]}; src=$q; fi
         vb=$((n > 1 ? n : 1))

@@ -493,7 +493,8 @@ session_limit_patterns against your system's message catalog and real fexp/bteq 
     (Redshift COPY ... ESCAPE compatible). A raw LF preceded by an odd number of \ is
     data, not the end of a record.
   * Decimals with precision above big_decimal_threshold (18) are quoted: "12345...67.89".
-  * Binary values are hexadecimal text.
+  * BYTE/VARBYTE values are hexadecimal with '-' between bytes (31-35-00); BLOB values are
+    plain hexadecimal text.
 
 Example (ORDER_ID INTEGER | NAME VARCHAR | NOTE VARCHAR | AMOUNT DECIMAL(20,2)):
   1001|ACME Corp|Rush \| fragile|"123456789012345678.25"
@@ -566,8 +567,10 @@ VARCHAR (CV)                   escaped_text      escaped                 VARCHAR
                                                                          max 65535
 CLOB (CO), JSON (JN), XML (XM) escaped_text      VARCHAR(lob_max_length) VARCHAR(65535)
                                                  after length check
-BYTE (BF), VARBYTE (BV),       hex               FROM_BYTES(..,'base16') VARBYTE(n)
-  BLOB (BO)                                      BLOB: length check
+BYTE (BF), VARBYTE (BV)        hex_dash          hex, '-' between bytes  VARCHAR(200)
+                                                 fails above 67 bytes
+BLOB (BO)                      hex               FROM_BYTES(..,'base16') VARBYTE(n)
+                                                 after length check
 anything else (UDT, ARRAY..)   unsupported       table fails             -
 
 Never lossy - the table fails (status failed, last_error set) instead of truncating when:
@@ -820,7 +823,8 @@ Further target notes [VALIDATE]:
     is expected to accept it.
   * TIMESTAMPTZ/TIMETZ values are UTC with a trailing Z.
   * FLOAT values use 17 significant digits and E+nnn exponents (FLOAT8).
-  * Binary columns are hexadecimal text for VARBYTE columns.
+  * BYTE/VARBYTE columns are dash-separated hexadecimal text for VARCHAR(200) columns;
+    BLOB columns are hexadecimal text for VARBYTE columns.
   * Columns with empty_string_possible = no in the metadata never contain \E.
   * For CDC cycles, COPY into a staging table and MERGE into the target.
   * After loading, compare row counts with rows/rows_exported in the state file and the

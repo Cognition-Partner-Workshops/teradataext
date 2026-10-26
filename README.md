@@ -200,7 +200,8 @@ the VARCHAR-staging approach described in section 20 of the
 | INTERVAL, PERIOD | CAST to VARCHAR | VARCHAR(n) |
 | CHAR / VARCHAR | escaped text (CHAR trimmed per `char_trim`) | CHAR(n) / VARCHAR(n), x4 for UNICODE |
 | CLOB / JSON / XML | escaped text up to `lob_max_length` | VARCHAR(65535) |
-| BYTE / VARBYTE / BLOB | hexadecimal | VARBYTE(n) |
+| BYTE / VARBYTE (up to 67 bytes) | hexadecimal, bytes separated by `-` (`31-35-00`) | VARCHAR(200) |
+| BLOB | hexadecimal | VARBYTE(n) |
 | UDT, ARRAY, other | table fails (never lossy) | |
 
 The full table is in [docs/DESIGN.md](docs/DESIGN.md) section 8.

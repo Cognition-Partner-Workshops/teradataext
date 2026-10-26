@@ -326,6 +326,24 @@ test_interrupted_cleanup_resumes_from_recorded_zip() {
     assert_empty "$(tt_requests export)"
 }
 
+test_binary_dash_hex() {
+    ut_need_fn tdx_build_rule
+    S_null_sentinel='\N' S_empty_sentinel='\E'
+    C_tc[1]=BV C_len[1]=67 C_name[1]=HEX_REV_TYPE
+    tdx_build_rule 1
+    assert_eq hex_dash "${R_enc[1]}" "VARBYTE(67) fits"
+    assert_eq "VARCHAR(200)" "${R_rs[1]}"
+    assert_eq 200 "${R_max[1]}"
+    assert_contains "${R_expr[1]}" "TRIM(TRAILING '-' FROM REGEXP_REPLACE(FROM_BYTES(\"HEX_REV_TYPE\", 'base16'), '([0-9A-F]{2})', '\1-', 1, 0, 'c'))"
+    C_tc[1]=BF C_len[1]=1
+    tdx_build_rule 1
+    assert_eq 2 "${R_max[1]}" "BYTE(1): two hex digits, no dash"
+    C_tc[1]=BV C_len[1]=68
+    tdx_build_rule 1
+    assert_eq unsupported "${R_enc[1]}" "VARBYTE(68) needs 203 characters"
+    assert_contains "${R_notes[1]}" "at most 67 bytes"
+}
+
 ut_run_failing() {   # ut_run_failing MODE -> UT_LOGS (all *.fexp.log / *.bteq.log)
     tt_env_new
     tt_config_set extract log_tool_output "$1"

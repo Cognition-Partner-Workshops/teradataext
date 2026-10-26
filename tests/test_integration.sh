@@ -62,7 +62,7 @@ test_meta_files() {
     assert_eq "$(for i in 1 2 3 4 5 6 7 8; do printf 'column.%03d\n' "$i"; done)" "$cols"
     for exp in "ID int_text INTEGER" "AMT decimal_text DECIMAL(10,2)" "BIG_AMT decimal_quoted DECIMAL(38,4)" \
         "NAME escaped_text VARCHAR(50)" "BIZ_DATE iso_date DATE" "CREATED_TS iso_timestamp TIMESTAMP" \
-        "EVENT_TSZ utc_iso_timestamp TIMESTAMPTZ" "PAYLOAD hex VARBYTE(16)"; do
+        "EVENT_TSZ utc_iso_timestamp TIMESTAMPTZ" "PAYLOAD hex_dash VARCHAR(200)"; do
         set -- $exp
         s=""
         for c in $cols; do [ "$(tt_ini_get "$m" "$c" name)" = "$1" ] && s=$c; done

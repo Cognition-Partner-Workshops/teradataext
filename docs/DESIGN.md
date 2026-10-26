@@ -332,7 +332,8 @@ data, not a record end. NULL = `\N`. Zero-length string/binary value = `\E`.
 | CHAR (CF) | escaped_text | trimmed per `char_trim`, escaped | CHAR(n)/VARCHAR(n*4) for UNICODE |
 | VARCHAR (CV) | escaped_text | escaped | VARCHAR(n) (x4 for UNICODE, max 65535) |
 | CLOB (CO), JSON (JN), XML (XM) | escaped_text | CAST/XMLSERIALIZE to VARCHAR(lob_max_length) after a MAX length pre-check, escaped | VARCHAR(65535) |
-| BYTE (BF), VARBYTE (BV), BLOB (BO) | hex | `FROM_BYTES(...,'base16')`, BLOB after a length pre-check | VARBYTE(n) |
+| BYTE (BF), VARBYTE (BV) | hex_dash | `FROM_BYTES(...,'base16')` with `-` between bytes (`31-35-00`); table fails if 3n-1 > 200 (n > 67 bytes) | VARCHAR(200) |
+| BLOB (BO) | hex | `FROM_BYTES(...,'base16')` after a length pre-check | VARBYTE(n) |
 | anything else (UDT, ARRAY, ...) | unsupported | table fails (never lossy) | |
 
 Never lossy: a table fails (status `failed`, `last_error` set) instead of truncating when a

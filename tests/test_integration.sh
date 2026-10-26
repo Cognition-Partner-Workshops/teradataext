@@ -415,6 +415,16 @@ test_table_list_where_one_table_replaces() {
     assert_eq "where = VAL <> 'X'" "$(it_meta_where big)"
 }
 
+test_table_list_where_empty_override() {
+    tt_env_new
+    it_tables_raw '[cust]' 'database = TDX_DB' 'table = {MIXED, BIG}' "where = ID < 100" '' \
+        '[big]' 'database = TDX_DB' 'table = BIG' 'where ='
+    tt_run_ok
+    assert_contains "$(it_sql_of MIXED)" "(ID < 100)"
+    assert_not_contains "$(it_sql_of BIG)" "ID < 100" "empty one-table where clears the list's"
+    assert_eq "where = " "$(it_meta_where big)"
+}
+
 test_table_list_where_disabled() {
     tt_env_new
     it_tables_raw '[cust]' 'database = TDX_DB' 'table = {MIXED, BIG}' "where = ID < 100" \

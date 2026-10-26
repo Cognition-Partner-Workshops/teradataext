@@ -320,11 +320,13 @@ tdx_section_where() {
 }
 
 # Copy the optional per-table settings of a one-table section into the T_* arrays.
-# A one-table where replaces the list's where ($4); without one the list's where is kept.
+# A one-table where replaces the list's where ($4), an empty "where =" clears it; without
+# a where key the list's where is kept.
 tdx_source_opts() {
     local path=$1 label=$2 key=$3 list_where=${4:-}
     tdx_section_where "$path" "$label"
-    T_WHERE[$key]=${REPLY:-$list_where}
+    tdx_ini_has "$label" where || REPLY=$list_where
+    T_WHERE[$key]=$REPLY
     tdx_get "$label" cdc_column ""
     T_CDC[$key]=$REPLY
     tdx_get "$label" chunk_column ""

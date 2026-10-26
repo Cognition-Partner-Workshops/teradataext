@@ -290,7 +290,8 @@ come from the list (the list always takes priority); cdc_column, chunk_column, w
 enabled come from the one-table section, and a WARNING is logged. enabled = false in the
 one-table section therefore switches the listed table off. A where in the one-table section
 replaces the list's where for that table (the two are not combined; repeat the list's
-conditions if you still want them); without one, the list's where is kept. The filter
+conditions if you still want them); an empty "where =" extracts that table unfiltered;
+without a where key, the list's where is kept. The filter
 actually used is written to the meta file (where = ...).
 
 Configuration errors (exit code 2): any key other than database, table, where and

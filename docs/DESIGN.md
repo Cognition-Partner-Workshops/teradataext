@@ -148,7 +148,8 @@ enabled = true              ; optional
 - A table both listed and given a one-table section: `database`/`table` come from the list
   (the list takes priority), `cdc_column`/`chunk_column`/`where`/`enabled` from the
   one-table section, and a WARNING is logged. A one-table `where` replaces the list's
-  `where` (not ANDed); without one, the list's `where` (if `enable_for_all`) is used.
+  `where` (not ANDed; an empty `where =` means no filter); without a `where` key, the
+  list's `where` (if `enable_for_all`) is used.
 - `where` continuation lines are joined with one space. The applied filter is recorded
   as `where = ...` in the `[table]` section of the meta file.
 - Work order follows the file: list members at the list section's position, other tables at

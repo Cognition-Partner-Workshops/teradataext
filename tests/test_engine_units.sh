@@ -261,11 +261,13 @@ test_export_text_and_timestamp_bounded() {
     tt_run_ok
     local sql
     sql=$(ut_export_sql)
-    assert_contains "$sql" "ELSE TRANSLATE(OREPLACE(OREPLACE(OREPLACE(OREPLACE(TRIM(TRAILING FROM \"CH_L\")" "LATIN text back to LATIN"
+    assert_contains "$sql" "ELSE TRANSLATE(OREPLACE(OREPLACE(OREPLACE(OREPLACE(OREPLACE(TRIM(TRAILING FROM \"CH_L\"), '00'XC, '')" "LATIN text back to LATIN"
     assert_contains "$sql" "'0A'XC, '\' || '0A'XC) USING UNICODE_TO_LATIN) END AS VARCHAR(20) CHARACTER SET UNICODE)" "CHAR(10) LATIN -> 20"
     assert_contains "$sql" "'0A'XC, '\' || '0A'XC) END AS VARCHAR(100) CHARACTER SET UNICODE)" "VARCHAR(50) UNICODE -> 100, no TRANSLATE"
     assert_contains "$sql" "SUBSTR(TRIM(CAST(CAST(\"TS0\" AS FORMAT 'YYYY-MM-DDBHH:MI:SS') AS VARCHAR(27))), 1, 10) || 'T' || "
     assert_not_contains "$sql" "OREPLACE(TRIM(CAST(CAST(" "timestamps do not use OREPLACE"
+    assert_contains "$sql" "OREPLACE(OREPLACE(\"VC_U\", '00'XC, ''), '\\', '\\\\')" "NUL bytes removed first"
+    assert_contains "$(cat "$(tt_meta_file TDX_DB TYPES)")" "NUL (0x00) bytes removed"
 }
 
 test_too_wide_table_fails_before_export() {

@@ -22,6 +22,8 @@ TDX_CDC_TYPES=" I1 I2 I I8 D N DA TS SZ "
 # OREPLACE with literal arguments returns VARCHAR(8000) CHARACTER SET UNICODE and fails (9134)
 # when a result would be longer.
 TDX_OREPLACE_MAX=8000
+# Text values: NUL (0x00) bytes are removed in SQL (portable awk cannot write them).
+TDX_NUL_NOTE="NUL (0x00) bytes removed"
 
 tdx_in() { [[ $2 == *" $1 "* ]]; }
 
@@ -55,6 +57,7 @@ tdx_esc_sql() {
     local x=$1 e d
     e=$(tdx_sql_str "$S_escape_char")
     d=$(tdx_sql_str "$S_delimiter")
+    x="OREPLACE($x, '00'XC, '')"
     x="OREPLACE($x, $e, $(tdx_sql_str "$S_escape_char$S_escape_char"))"
     x="OREPLACE($x, $d, $(tdx_sql_str "$S_escape_char$S_delimiter"))"
     x="OREPLACE($x, '0D'XC, $e || '0D'XC)"
@@ -213,6 +216,7 @@ tdx_build_rule() {
             tdx_rule "$i" escaped_text "VARCHAR(65535)" "$REPLY" 1 1 ""
             tdx_text_value "$q" "$text" CHARACTER_LENGTH "$latin"
             R_expr[i]=$REPLY
+            R_notes[i]=$TDX_NUL_NOTE
             return
         fi
         chars=${C_len[i]}
@@ -240,7 +244,8 @@ tdx_build_rule() {
         tdx_rule "$i" escaped_text "$rs" "$REPLY" 0 1 ""
         tdx_text_value "$q" "$text" CHARACTER_LENGTH "$latin"
         R_expr[i]=$REPLY
-        [[ $c == CF && $S_char_trim != none ]] && R_notes[i]="CHAR padding trimmed ($S_char_trim)"
+        R_notes[i]=$TDX_NUL_NOTE
+        [[ $c == CF && $S_char_trim != none ]] && R_notes[i]+="; CHAR padding trimmed ($S_char_trim)"
     elif tdx_in "$c" " BF BV BO "; then
         local n src lob=0 vb
         if [[ $c == BO ]]; then n=$S_lob_max_length; src="CAST($q AS VARBYTE($n))"; lob=1; else n=${C_len[i]}; src=$q; fi

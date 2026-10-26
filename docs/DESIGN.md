@@ -121,11 +121,13 @@ big_decimal_threshold = 18
 Two section forms; section names are free labels.
 
 ```ini
-; table list section: database + table list only (braces optional, commas, may wrap
-; onto indented lines). Listed tables: automatic chunking, no filter, full extract.
+; table list section: database + table list (braces optional, commas, may wrap onto
+; indented lines). Listed tables: automatic chunking, full extract.
 [sales]
 database = SALES
 table = {REGION, ORDERS, CUSTOMER}
+where =                     ; optional static filter for every listed table
+enable_for_all = true       ; optional; false = the list's where is ignored
 
 ; one-table section: one table name plus optional settings
 [customer]
@@ -139,12 +141,16 @@ enabled = true              ; optional
 
 - `table` is a list when it contains a comma or a newline, or is wrapped in `{...}`;
   otherwise it is a single table name (the original one-table form, unchanged).
-- A list section with any key other than `database`/`table`, unbalanced braces, an empty
+- A list section with any key other than `database`/`table`/`where`/`enable_for_all`,
+  an invalid `where` or `enable_for_all`, unbalanced braces, an empty
   list item, a table in two list sections, or two one-table sections for the same table
   (even disabled ones) is a configuration error (exit 2).
 - A table both listed and given a one-table section: `database`/`table` come from the list
   (the list takes priority), `cdc_column`/`chunk_column`/`where`/`enabled` from the
-  one-table section, and a WARNING is logged.
+  one-table section, and a WARNING is logged. A one-table `where` replaces the list's
+  `where` (not ANDed); without one, the list's `where` (if `enable_for_all`) is used.
+- `where` continuation lines are joined with one space. The applied filter is recorded
+  as `where = ...` in the `[table]` section of the meta file.
 - Work order follows the file: list members at the list section's position, other tables at
   their own section's position.
 
@@ -363,7 +369,7 @@ column's own FORMAT. An unbounded NUMBER is cast without a FORMAT.
 ```ini
 [table]
 database, table, extracted_at, column_count, row_estimate, row_estimate_source,
-primary_index, chunk_strategy, chunk_column, chunk_count, cdc_column, session_charset,
+primary_index, chunk_strategy, chunk_column, chunk_count, cdc_column, where, session_charset,
 file_format, delimiter, null_sentinel, empty_sentinel, escape_char, record_terminator,
 timezone_policy = UTC
 

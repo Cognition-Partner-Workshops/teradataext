@@ -240,17 +240,30 @@ with --config PATH.
 
 Two kinds of section; section names are free labels.
 
-Table list section (one per database). Only database and table are allowed:
+Table list section (one per database): database, table and optionally where and
+enable_for_all:
 
   [sales]
   database = SALES
   table = {REGION, ORDERS, CUSTOMER,
       ORDER_LINES}
+  where = CREATED_DATE >= DATE '2024-01-01'
+      AND UPDATED_DATE < DATE '2025-01-01'
+  enable_for_all = true
 
   Braces are optional (table = REGION, ORDERS works too). Separate names with commas; a
   long list may continue on indented lines. Listed tables are chunked automatically
-  (section 9), have no static filter and are fully extracted every cycle (no CDC), unless
-  they also have a one-table section.
+  (section 9) and are fully extracted every cycle (no CDC), unless they also have a
+  one-table section.
+
+  where             Optional. Static SQL filter ANDed into every export of every listed
+                    table (same rules as the one-table where below). Every listed table
+                    must have the columns it uses; a table without them fails with
+                    Teradata error 3810 and the other tables continue. More conditions can
+                    be added with AND; a long filter may continue on indented lines, which
+                    are joined with one space.
+  enable_for_all    Optional, default true. true = where applies to all listed tables;
+                    false = where is ignored (tables are still extracted, unfiltered).
 
 One-table section: one table name plus optional settings:
 
@@ -266,8 +279,8 @@ One-table section: one table name plus optional settings:
   cdc_column        Optional. Enables incremental extraction (section 10).
   chunk_column      Optional. Overrides the automatically chosen chunk column (section 9).
   where             Optional. Static SQL filter ANDed into every export of the table
-                    (every chunk). Write it as plain Teradata SQL on one line: a single
-                    boolean condition. ';', '--', '/*' and '*/' outside string literals are
+                    (every chunk). Write it as plain Teradata SQL: a single boolean
+                    condition (indented continuation lines are joined with one space). ';', '--', '/*' and '*/' outside string literals are
                     rejected. The filter runs with the extraction user's rights, so keep
                     source_tables.ini writable only by the operator.
   enabled           Optional, default true. false = the table is ignored.
@@ -275,9 +288,13 @@ One-table section: one table name plus optional settings:
 A table that is in a list section and also has a one-table section: database and table
 come from the list (the list always takes priority); cdc_column, chunk_column, where and
 enabled come from the one-table section, and a WARNING is logged. enabled = false in the
-one-table section therefore switches the listed table off.
+one-table section therefore switches the listed table off. A where in the one-table section
+replaces the list's where for that table (the two are not combined; repeat the list's
+conditions if you still want them); without one, the list's where is kept. The filter
+actually used is written to the meta file (where = ...).
 
-Configuration errors (exit code 2): any key other than database/table in a list section,
+Configuration errors (exit code 2): any key other than database, table, where and
+enable_for_all in a list section, an invalid where or enable_for_all value,
 unbalanced braces or an empty name in a list, a table in two list sections, two one-table
 sections for the same table (even if one has enabled = false). Tables are processed in
 file order (list members at their list section's position).
@@ -600,7 +617,7 @@ TIME and TIMESTAMP without time zone are written as stored (no conversion).
 
 Written for every extracted table. [table] section: database, table, extracted_at,
 column_count, row_estimate, row_estimate_source, primary_index, chunk_strategy,
-chunk_column, chunk_count, cdc_column, session_charset, file_format, delimiter,
+chunk_column, chunk_count, cdc_column, where, session_charset, file_format, delimiter,
 null_sentinel, empty_sentinel, escape_char, record_terminator, timezone_policy = UTC.
 
 One [column.NNN] section per column in ordinal order: name, position, source_type

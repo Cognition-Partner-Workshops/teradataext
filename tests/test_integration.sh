@@ -372,12 +372,69 @@ test_table_list_one_table_section_disables() {
     assert_empty "$(it_export_reqs "$BIG")"
 }
 
+it_sql_of() {   # all fake-tool scripts that read table $1 (TDX_DB.<name>), concatenated
+    local d=$TDX_TMP/.sql.$$ f
+    rm -rf "$d"; tt_fake_scripts "$d" >/dev/null
+    for f in "$d"/*; do grep -qF "\"TDX_DB\".\"$1\"" "$f" && cat "$f"; done
+    return 0
+}
+it_meta_where() { grep '^where = ' "$TDX_ROOT/metadata/tdx_db_$1.meta.ini"; }
+
+test_table_list_where_applies_to_all() {
+    tt_env_new
+    it_tables_raw '[cust]' 'database = TDX_DB' 'table = {MIXED, BIG}' \
+        "where = BIZ_DATE >= DATE '2024-01-01'" "    AND ID < 100" 'enable_for_all = true'
+    tt_run_ok
+    assert_match "$TDX_OUT" 'Tables[[:space:]]*:[[:space:]]*done=2 failed=0 pending=0'
+    local t w="(BIZ_DATE >= DATE '2024-01-01' AND ID < 100)"
+    for t in MIXED BIG; do
+        assert_contains "$(it_sql_of "$t")" "$w" "$t export uses the list's where"
+    done
+    assert_eq "where = BIZ_DATE >= DATE '2024-01-01' AND ID < 100" "$(it_meta_where mixed)"
+}
+
+test_table_list_where_default_enabled() {
+    tt_env_new
+    it_tables_raw '[cust]' 'database = TDX_DB' 'table = MIXED, BIG' "where = ID < 100"
+    tt_run_ok
+    assert_contains "$(it_sql_of BIG)" "(ID < 100)" "enable_for_all defaults to true"
+}
+
+test_table_list_where_one_table_replaces() {
+    tt_env_new
+    it_tables_raw '[cust]' 'database = TDX_DB' 'table = {MIXED, BIG, CDC}' "where = ID < 100" '' \
+        '[big]' 'database = TDX_DB' 'table = BIG' "where = VAL <> 'X'" '' \
+        '[cdc]' 'database = TDX_DB' 'table = CDC' 'cdc_column = UPDATED_TS'
+    tt_run_ok
+    assert_match "$TDX_OUT" 'Tables[[:space:]]*:[[:space:]]*done=3 failed=0 pending=0'
+    assert_contains "$(it_sql_of MIXED)" "(ID < 100)"
+    assert_contains "$(it_sql_of BIG)" "(VAL <> 'X')" "one-table where is used"
+    assert_not_contains "$(it_sql_of BIG)" "ID < 100" "one-table where replaces the list's"
+    assert_contains "$(it_sql_of CDC)" "(ID < 100)" "one-table section without where keeps the list's"
+    assert_eq "$WM1" "$(tt_state "$CDC" watermark)" "cdc_column still from the one-table section"
+    assert_eq "where = VAL <> 'X'" "$(it_meta_where big)"
+}
+
+test_table_list_where_disabled() {
+    tt_env_new
+    it_tables_raw '[cust]' 'database = TDX_DB' 'table = {MIXED, BIG}' "where = ID < 100" \
+        'enable_for_all = false' '' '[big]' 'database = TDX_DB' 'table = BIG' "where = VAL <> 'X'"
+    tt_run_ok
+    assert_match "$TDX_OUT" 'Tables[[:space:]]*:[[:space:]]*done=2 failed=0 pending=0'
+    assert_not_contains "$(it_sql_of MIXED)" "ID < 100" "enable_for_all = false ignores the list's where"
+    assert_contains "$(it_sql_of BIG)" "(VAL <> 'X')" "one-table where still applies"
+    assert_eq "where = " "$(it_meta_where mixed)"
+}
+
 test_table_list_config_errors() {
     tt_env_new
     local -a bad
     local case_
-    for case_ in extra_key dup_list unbalanced empty_item trailing_brace trailing_plain dup_single dup_disabled; do
+    for case_ in extra_key list_enabled bad_where bad_enable_for_all dup_list unbalanced empty_item trailing_brace trailing_plain dup_single dup_disabled; do
         case $case_ in
+            list_enabled) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED, BIG}' 'enabled = false' ;;
+            bad_where) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED, BIG}' 'where = ID > 1; DELETE FROM X' ;;
+            bad_enable_for_all) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED, BIG}' 'where = ID > 1' 'enable_for_all = maybe' ;;
             extra_key) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED, BIG}' 'cdc_column = UPDATED_TS' ;;
             dup_list) it_tables_raw '[a]' 'database = TDX_DB' 'table = {MIXED, BIG}' '[b]' 'database = TDX_DB' 'table = {BIG}' ;;
             unbalanced) it_tables_raw '[t]' 'database = TDX_DB' 'table = {MIXED, BIG' ;;

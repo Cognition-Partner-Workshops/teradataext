@@ -308,14 +308,23 @@ tdx_table_list() {
     ((${#TL[@]})) || { TDX_ERR="empty table list"; return 2; }
 }
 
-# Copy the optional per-table settings of a one-table section into the T_* arrays.
-tdx_source_opts() {
-    local path=$1 label=$2 key=$3 why
+# REPLY = validated where filter of a section ("" if none); continuation lines are joined
+# with a single space.
+tdx_section_where() {
+    local path=$1 label=$2 why
     tdx_get "$label" where ""
+    REPLY=${REPLY//$'\n'/ }
     if [[ -n $REPLY ]] && ! why=$(tdx_check_where "$REPLY"); then
         tdx_config_error "$path [$label]: where: $why (one boolean condition only)"
     fi
-    T_WHERE[$key]=$REPLY
+}
+
+# Copy the optional per-table settings of a one-table section into the T_* arrays.
+# A one-table where replaces the list's where ($4); without one the list's where is kept.
+tdx_source_opts() {
+    local path=$1 label=$2 key=$3 list_where=${4:-}
+    tdx_section_where "$path" "$label"
+    T_WHERE[$key]=${REPLY:-$list_where}
     tdx_get "$label" cdc_column ""
     T_CDC[$key]=$REPLY
     tdx_get "$label" chunk_column ""
@@ -323,12 +332,14 @@ tdx_source_opts() {
 }
 
 # Two section forms:
-#   list section:       database + table = {A, B, ...}   (no other keys)
+#   list section:       database + table = {A, B, ...} [+ where, enable_for_all]
 #   one-table section:  database + table = NAME [+ cdc_column, chunk_column, where, enabled]
+# A list's where applies to every listed table when enable_for_all is true (default).
 # A table in a list may also have a one-table section: database/table come from the list,
-# the other settings from the one-table section (a warning is logged).
+# the other settings from the one-table section, whose where replaces the list's (a
+# warning is logged).
 tdx_load_sources() {
-    local path=$1 label db tb key k t rc
+    local path=$1 label db tb key k t rc lwhere
     [[ -f $path ]] || tdx_config_error "source tables file not found: $path"
     tdx_ini_read "$path" || tdx_config_error "cannot parse $path: $TDX_INI_ERR"
     T_KEYS=()
@@ -352,10 +363,12 @@ tdx_load_sources() {
             for k in "${!INI_V[@]}"; do
                 [[ ${k%%"$TDX_US"*} == "$label" ]] || continue
                 case ${k#*"$TDX_US"} in
-                    database | table) ;;
-                    *) tdx_config_error "$path [$label]: a table list section takes only database and table, not ${k#*"$TDX_US"} (put it in a one-table section)" ;;
+                    database | table | where | enable_for_all) ;;
+                    *) tdx_config_error "$path [$label]: a table list section takes only database, table, where and enable_for_all, not ${k#*"$TDX_US"} (put it in a one-table section)" ;;
                 esac
             done
+            tdx_section_where "$path" "$label"
+            tdx_get_bool "$label" enable_for_all 1
             for t in "${TL[@]}"; do
                 key="$db.$t"
                 key=${key^^}
@@ -383,6 +396,12 @@ tdx_load_sources() {
             tdx_table_list "$(tdx_strip "${INI_V["$label${TDX_US}table"]}")"
             tdx_get "$label" database ""
             db=$REPLY
+            lwhere=""
+            tdx_get_bool "$label" enable_for_all 1
+            if [[ $REPLY == 1 ]]; then
+                tdx_section_where "$path" "$label"
+                lwhere=$REPLY
+            fi
             for t in "${TL[@]}"; do
                 key="$db.$t"
                 key=${key^^}
@@ -391,9 +410,9 @@ tdx_load_sources() {
                     tdx_warn "$path: $key is listed in [$label] and also defined in [$s]; database/table from [$label], other settings from [$s]"
                     tdx_get_bool "$s" enabled 1
                     [[ $REPLY == 1 ]] || continue
-                    tdx_source_opts "$path" "$s" "$key"
+                    tdx_source_opts "$path" "$s" "$key" "$lwhere"
                 else
-                    T_WHERE[$key]="" T_CDC[$key]="" T_CHUNK[$key]=""
+                    T_WHERE[$key]=$lwhere T_CDC[$key]="" T_CHUNK[$key]=""
                 fi
                 T_DB[$key]=${list_db[$key]}
                 T_TABLE[$key]=${list_tb[$key]}

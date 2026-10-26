@@ -22,6 +22,8 @@ TDX_CDC_TYPES=" I1 I2 I I8 D N DA TS SZ "
 # OREPLACE with literal arguments returns VARCHAR(8000) CHARACTER SET UNICODE and fails (9134)
 # when a result would be longer.
 TDX_OREPLACE_MAX=8000
+# Text values: NUL (0x00) bytes are removed in SQL (portable awk cannot write them).
+TDX_NUL_NOTE="NUL (0x00) bytes removed"
 
 tdx_in() { [[ $2 == *" $1 "* ]]; }
 
@@ -63,7 +65,7 @@ tdx_esc_sql() {
 
 # tdx_text_value COL TEXT LENFN LATIN: LATIN=1 translates the (UNICODE) OREPLACE result back to LATIN
 tdx_text_value() {
-    local col=$1 text=$2 lenfn=$3 latin=$4 out
+    local col=$1 text="OREPLACE($2, '00'XC, '')" lenfn=$3 latin=$4 out
     out="CASE WHEN $col IS NULL THEN $(tdx_sql_str "$S_null_sentinel")"
     [[ -n $S_empty_sentinel ]] && out+=" WHEN $lenfn($text) = 0 THEN $(tdx_sql_str "$S_empty_sentinel")"
     tdx_esc_sql "$text"
@@ -213,6 +215,7 @@ tdx_build_rule() {
             tdx_rule "$i" escaped_text "VARCHAR(65535)" "$REPLY" 1 1 ""
             tdx_text_value "$q" "$text" CHARACTER_LENGTH "$latin"
             R_expr[i]=$REPLY
+            R_notes[i]=$TDX_NUL_NOTE
             return
         fi
         chars=${C_len[i]}
@@ -240,7 +243,8 @@ tdx_build_rule() {
         tdx_rule "$i" escaped_text "$rs" "$REPLY" 0 1 ""
         tdx_text_value "$q" "$text" CHARACTER_LENGTH "$latin"
         R_expr[i]=$REPLY
-        [[ $c == CF && $S_char_trim != none ]] && R_notes[i]="CHAR padding trimmed ($S_char_trim)"
+        R_notes[i]=$TDX_NUL_NOTE
+        [[ $c == CF && $S_char_trim != none ]] && R_notes[i]+="; CHAR padding trimmed ($S_char_trim)"
     elif tdx_in "$c" " BF BV BO "; then
         local n src lob=0 vb
         if [[ $c == BO ]]; then n=$S_lob_max_length; src="CAST($q AS VARBYTE($n))"; lob=1; else n=${C_len[i]}; src=$q; fi
@@ -296,15 +300,21 @@ tdx_record_width() {
     REPLY=$((total + (NCOLS - 1) * ${#S_delimiter}))
 }
 
+# Every || operand has an explicit character set: literals are UNICODE and functions such as
+# FROM_BYTES may return UNICODE, which would make the record UNICODE (32000 maximum, Failure 3798
+# on VARCHAR(64000)).
 tdx_record_sql() {
-    local i joined="" d limit
+    local i joined="" d limit cs=LATIN
+    tdx_varchar_max
+    ((REPLY < 64000)) && cs=UNICODE
     d=$(tdx_sql_str "$S_delimiter")
+    [[ $cs == LATIN ]] && d="TRANSLATE($d USING UNICODE_TO_LATIN)"
     tdx_row_limit
     limit=$REPLY
     for ((i = 1; i <= NCOLS; i++)); do
         ((i > 1)) && joined+=" || $d || "
         tdx_col_width "$i" "$limit"
-        joined+="CAST(${R_expr[i]} AS VARCHAR($REPLY))"
+        joined+="CAST(${R_expr[i]} AS VARCHAR($REPLY) CHARACTER SET $cs)"
     done
-    REPLY="CAST($joined AS VARCHAR($((limit + 1))))"
+    REPLY="CAST($joined AS VARCHAR($((limit + 1))) CHARACTER SET $cs)"
 }

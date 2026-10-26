@@ -58,6 +58,13 @@ function pystrip(s) { sub(/^[ \t\r\f\v]+/, "", s); sub(/[ \t\r\f\v]+$/, "", s); 
     scan_codes(raw, 3, 5)
     for (i = 1; i <= np; i++) if (pats[i] != "" && index(lraw, pats[i])) sl = 1
     m = mask_line(raw)
+    # FastExport: "**** 19:54:31 UTY8713 RDBMS failure, 3798: A column or ..."
+    if (match(raw, /[Ff]ailure,[ \t]*[0-9]+/)) {
+        v = substr(raw, RSTART, RLENGTH); sub(/^[^0-9]*/, "", v)
+        if ((v + 0) in slc) sl = 1
+        if (err_code == "") err_code = v
+        if (!err_coded) { err_line = pystrip(m); err_coded = 1 }
+    }
     if (err_code == "") err_code = scan_codes(m, 1, 0)
     # a numbered "*** Failure/Error NNNN" line wins over notices such as "*** Error messages now ..."
     if (!err_coded && m ~ /\*\*\* (Failure|Error) [0-9]/) { err_line = pystrip(m); err_coded = 1 }

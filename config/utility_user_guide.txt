@@ -92,6 +92,7 @@ Teradata user rights (logon user)
     metadata).
   * CREATE TABLE (and DROP TABLE) rights in logtable_database (or the user's default
     database when logtable_database is empty) for the FastExport restart log tables
+    (after a failed FastExport the utility drops its log table with BTEQ, best effort)
     tdx_lt_<hash> (<hash> = the first 12 hex digits of the SHA-256 of the job id; earlier
     versions used SHA-1, so the names differ from theirs).
   * Enough spool space for the largest export query / chunk.
@@ -509,8 +510,9 @@ Raw decoding
   lib/rawdecode.awk, run with the awk selected by TDX_AWK (section 2). The layout (with or
   without the record-length prefix and end-of-record byte) is auto-detected; the job
   fails when no layout fits the whole file. Every byte passes through unchanged, except
-  that a NUL (0x00) byte inside a record fails the job: portable awks cannot write NUL
-  bytes, and the utility never drops or alters data silently (section 19).
+  NUL (0x00): text values (CHAR, VARCHAR, CLOB, JSON, XML) have NUL bytes removed in the
+  SQL, and the column's notes in the meta file say "NUL (0x00) bytes removed" (Redshift
+  cannot store NUL in VARCHAR either). A NUL byte anywhere else fails the job.
 
   Decoding runs after the export of each job (table or chunk) has finished, as part of
   that job, so it adds to the job's elapsed time. Jobs running in parallel decode
@@ -733,9 +735,9 @@ Table marked failed (exit 1)
   * non-LATIN column with ASCII - set session_charset = UTF8.
   * row count mismatch / raw layout not recognised - check the tool log; report it with
     the work/ script and tool versions.
-  * NUL byte in a record - a value contains a 0x00 byte, which cannot be written by a
-    portable awk (section 13). Export the table through a view that removes or replaces
-    the byte in the affected column, or converts the column to hex [VALIDATE].
+  * NUL byte in a record - text values have NUL bytes removed automatically, so this
+    means a non-text value produced one (should not happen; report it with the work/
+    script). Export the table through a view that converts the column [VALIDATE].
   Fix the cause and rerun: done chunks are skipped.
 
 Slow jobs

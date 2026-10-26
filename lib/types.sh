@@ -300,9 +300,10 @@ tdx_record_width() {
     REPLY=$((total + (NCOLS - 1) * ${#S_delimiter}))
 }
 
-# Every || operand has an explicit character set: literals are UNICODE and functions such as
-# FROM_BYTES may return UNICODE, which would make the record UNICODE (32000 maximum, Failure 3798
-# on VARCHAR(64000)).
+# LATIN records: every || operand is TRANSLATEd to LATIN. Literals are UNICODE and functions such
+# as FROM_BYTES may return UNICODE, which would make the record UNICODE (32000 maximum, Failure
+# 3798 on VARCHAR(64000)). CAST cannot change the character set (Failure 5355); TRANSLATE
+# converts LATIN input implicitly, so it works on both.
 tdx_record_sql() {
     local i joined="" d limit cs=LATIN
     tdx_varchar_max
@@ -314,7 +315,11 @@ tdx_record_sql() {
     for ((i = 1; i <= NCOLS; i++)); do
         ((i > 1)) && joined+=" || $d || "
         tdx_col_width "$i" "$limit"
-        joined+="CAST(${R_expr[i]} AS VARCHAR($REPLY) CHARACTER SET $cs)"
+        if [[ $cs == LATIN ]]; then
+            joined+="CAST(TRANSLATE(${R_expr[i]} USING UNICODE_TO_LATIN) AS VARCHAR($REPLY))"
+        else
+            joined+="CAST(${R_expr[i]} AS VARCHAR($REPLY))"
+        fi
     done
-    REPLY="CAST($joined AS VARCHAR($((limit + 1))) CHARACTER SET $cs)"
+    REPLY="CAST($joined AS VARCHAR($((limit + 1))))"
 }

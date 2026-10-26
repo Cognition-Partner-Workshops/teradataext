@@ -340,11 +340,12 @@ LOB value exceeds `lob_max_length`, a record would exceed `max_row_length`, a co
 unsupported, or a non-LATIN character column is exported with `session_charset = ASCII`.
 LOB tables always use BTEQ EXPORT.
 
-Export record SQL: each column expression is `CAST(... AS VARCHAR(w) CHARACTER SET cs)`, where
+Export record SQL: each column expression is `CAST(... AS VARCHAR(w))`, where
 `w` is the column's longest possible output (or sentinel), capped at the record limit + 1; the
-columns are joined with the delimiter and the record is cast to `VARCHAR(limit + 1) CHARACTER SET
-cs`. `cs` is UNICODE for tables with UNICODE/JSON/XML columns, else LATIN, and the delimiter is
-then `TRANSLATE('|' USING UNICODE_TO_LATIN)`: literals and functions such as `FROM_BYTES` may
+columns are joined with the delimiter and the record is cast to `VARCHAR(limit + 1)`. For tables
+without UNICODE/JSON/XML columns every column is `CAST(TRANSLATE(... USING UNICODE_TO_LATIN) AS
+VARCHAR(w))` and the delimiter `TRANSLATE('|' USING UNICODE_TO_LATIN)` (CAST cannot change the
+character set: Failure 5355): literals and functions such as `FROM_BYTES` may
 return UNICODE, and one UNICODE operand makes the whole record UNICODE (32000 maximum). Text columns
 count `2 * length` (every character escaped), at most 8000 (the `OREPLACE` limit); a text
 value longer than 8000 characters after escaping fails the table with Teradata error 9134.

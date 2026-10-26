@@ -220,6 +220,7 @@ tdx_write_meta() {
         printf 'chunk_column = %s\n' "$chunk_col"
         printf 'chunk_count = %s\n' "$nchunks"
         printf 'cdc_column = %s\n' "${T_CDC[$key]}"
+        printf 'where = %s\n' "${T_WHERE[$key]}"
         printf 'session_charset = %s\n' "$S_session_charset"
         printf 'file_format = pipe-delimited\n'
         printf 'delimiter = %s\n' "$S_delimiter"

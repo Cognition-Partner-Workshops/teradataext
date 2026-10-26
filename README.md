@@ -22,8 +22,8 @@ instead of `.zip`.
   (NULLs go to chunk 1), otherwise `HASHBUCKET(HASHROW(PI)) MOD n`. You can override the
   chunk column per table.
 - `source_tables.ini`: list all tables of a database in one section
-  (`table = {REGION, ORDERS, ...}`), with optional one-table sections for CDC, chunk
-  column and `where` filter.
+  (`table = {REGION, ORDERS, ...}`), optionally with one `where` filter for all listed
+  tables (`enable_for_all`), and one-table sections for CDC, chunk column and `where`.
 - Parallel jobs within a Teradata session budget (`parallel`, `max_sessions`).
 - Retry on session-limit errors, halving the session count on each retry.
 - Resumable: state is saved atomically after every chunk. Tables and chunks already done

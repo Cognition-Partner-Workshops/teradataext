@@ -267,6 +267,7 @@ test_export_text_and_timestamp_bounded() {
     assert_contains "$sql" "SUBSTR(TRIM(CAST(CAST(\"TS0\" AS FORMAT 'YYYY-MM-DDBHH:MI:SS') AS VARCHAR(27))), 1, 10) || 'T' || "
     assert_not_contains "$sql" "OREPLACE(TRIM(CAST(CAST(" "timestamps do not use OREPLACE"
     assert_contains "$sql" "OREPLACE(OREPLACE(\"VC_U\", '00'XC, ''), '\\', '\\\\')" "NUL bytes removed first"
+    assert_contains "$sql" "WHEN CHARACTER_LENGTH(OREPLACE(\"VC_U\", '00'XC, '')) = 0 THEN '\\E'" "NUL-only value -> empty sentinel"
     assert_contains "$(cat "$(tt_meta_file TDX_DB TYPES)")" "NUL (0x00) bytes removed"
 }
 

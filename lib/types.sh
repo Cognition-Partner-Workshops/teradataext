@@ -57,7 +57,6 @@ tdx_esc_sql() {
     local x=$1 e d
     e=$(tdx_sql_str "$S_escape_char")
     d=$(tdx_sql_str "$S_delimiter")
-    x="OREPLACE($x, '00'XC, '')"
     x="OREPLACE($x, $e, $(tdx_sql_str "$S_escape_char$S_escape_char"))"
     x="OREPLACE($x, $d, $(tdx_sql_str "$S_escape_char$S_delimiter"))"
     x="OREPLACE($x, '0D'XC, $e || '0D'XC)"
@@ -66,7 +65,7 @@ tdx_esc_sql() {
 
 # tdx_text_value COL TEXT LENFN LATIN: LATIN=1 translates the (UNICODE) OREPLACE result back to LATIN
 tdx_text_value() {
-    local col=$1 text=$2 lenfn=$3 latin=$4 out
+    local col=$1 text="OREPLACE($2, '00'XC, '')" lenfn=$3 latin=$4 out
     out="CASE WHEN $col IS NULL THEN $(tdx_sql_str "$S_null_sentinel")"
     [[ -n $S_empty_sentinel ]] && out+=" WHEN $lenfn($text) = 0 THEN $(tdx_sql_str "$S_empty_sentinel")"
     tdx_esc_sql "$text"

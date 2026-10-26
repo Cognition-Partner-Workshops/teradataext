@@ -162,6 +162,11 @@ test_tool_error_prefers_numbered_failure() {
     assert_eq "*** Failure 3798 A column or character expression is larger than the max size." \
         "$(printf '%s' "$out" | tdx_tool_error_summary errors 8)"
     assert_eq "Teradata error 3798" "$(printf '%s' "$out" | tdx_tool_error_summary none 8)"
+    out=$'**** 19:54:30 UTY8400 Default character set: ASCII\n'
+    out+=$'**** 19:54:31 UTY8713 RDBMS failure, 3798: A column or character expression is\n     larger than the max size.'
+    assert_eq "**** 19:54:31 UTY8713 RDBMS failure, 3798: A column or character expression is" \
+        "$(printf '%s' "$out" | tdx_tool_error_summary errors 12)" "FastExport failure line"
+    assert_eq "Teradata error 3798" "$(printf '%s' "$out" | tdx_tool_error_summary none 12)"
     assert_eq "*** Error messages now directed to STDOUT." \
         "$(printf '%s' $'*** Error messages now directed to STDOUT.\n*** Logoff' | tdx_tool_error_summary errors 8)"
 }

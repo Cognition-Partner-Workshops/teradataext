@@ -71,7 +71,7 @@ logmech =                      ; optional, e.g. TD2 / LDAP (emitted as .LOGMECH)
 credentials_file =             ; optional path to a chmod 0600 file (see section 6)
 fexp_path = fexp
 bteq_path = bteq
-session_charset = ASCII        ; ASCII or UTF8
+session_charset = AUTO         ; AUTO (default), ASCII or UTF8
 logtable_database =            ; database for FastExport .LOGTABLE (default: the user's default db)
 connect_check = true           ; TCP connect to host:port before starting
 
@@ -266,7 +266,8 @@ LATIN columns) before it is concatenated.
 | cdcmax | max cdc value (`\N` when there are no new rows); integers plain, DATE `YYYY-MM-DD`, TIMESTAMP `YYYY-MM-DD HH:MI:SS.ffffff` |
 | export | the encoded data record (section 8) |
 
-BTEQ script shape:
+BTEQ script shape (`AUTO`: the metadata query logs on as UTF8, every later query, export
+and decode of the table uses the charset chosen for it):
 ```
 .SET SESSION CHARSET 'ASCII';
 .LOGON host/user,password;
@@ -315,7 +316,7 @@ Other failures are not retried within the run.
 
 ## 8. Data file format (`.dat`)
 
-ASCII (or UTF-8 when `session_charset = UTF8`) text, one record per row, `|` delimited,
+ASCII (or UTF-8 when the table's session charset is UTF8) text, one record per row, `|` delimited,
 records terminated by LF. Inside text values `\`, `|`, CR and LF are escaped by a preceding
 `\` (Redshift `COPY ... ESCAPE` compatible), so a raw LF preceded by an odd number of `\` is
 data, not a record end. NULL = `\N`. Zero-length string/binary value = `\E`.
@@ -446,7 +447,13 @@ NUL bytes: text values (CHAR/VARCHAR/CLOB/JSON/XML) have NUL (0x00) bytes remove
 (`OREPLACE(x, '00'XC, '')`, first step of the escaping); the column's meta `notes` says so.
 Raw decoding: any NUL byte still inside a record fails the job (portable awks cannot write NUL).
 Every other byte passes through unchanged. Record length is counted in UTF-8 characters when
-`session_charset = UTF8`, else in bytes, as before.
+the table's session charset is UTF8, else in bytes, as before.
+
+session_charset = AUTO (default): chosen per table after its DBC.ColumnsV query (run as
+UTF8): UTF8 when any column has CharType 2 (UNICODE) or is XML, or the database, table or a
+column name has a non-ASCII byte, else ASCII. The choice is
+logged, passed to every chunk job of the table (fexp `-c UTF8`, BTEQ `.SET SESSION CHARSET`),
+and written as the meta `session_charset` (ASCII or UTF8, never AUTO).
 
 Range chunks: integer and DATE keys use the former formula exactly (shell 64-bit arithmetic;
 DATE via day numbers). DECIMAL keys with a scale, and integer keys beyond 18 digits, get their

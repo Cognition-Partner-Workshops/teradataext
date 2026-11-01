@@ -483,3 +483,73 @@ test_connect_check_reports_reason() {
     assert_contains "$TDX_ERR" "cannot reach 127.0.0.1:1: connection failed (Connection refused)"
     assert_eq 0 "$(tt_fake_calls)"
 }
+
+it_fexp_argv() {   # @argv lines of every fexp call whose script reads table $1 (TDX_DB.<name>)
+    TDXT="\"TDX_DB\".\"$1\"" tt_awk '
+        /^@call / { fexp = ($0 ~ /tool=fexp/); argv = ""; hit = 0; next }
+        /^@argv / { argv = argv $0 "\n"; next }
+        /^>/ { if (index($0, ENVIRON["TDXT"])) hit = 1; next }
+        /^@end$/ { if (fexp && hit) printf "%s@\n", argv }' "$TDX_FAKE_LOG_FILE"
+}
+it_set_unicode() {   # it_set_unicode DB.TABLE COLUMN_ID: make that column CHARACTER SET UNICODE
+    TDXK=$1 TDXC=$2 tt_awk -F '\t' -v OFS='\t' '
+        $1 == ENVIRON["TDXK"] && $2 == "column" && $3 == ENVIRON["TDXC"] { $NF = 2 } { print }' \
+        "$TDX_FIXTURE" >"$TDX_FIXTURE.new" && mv -f "$TDX_FIXTURE.new" "$TDX_FIXTURE"
+}
+
+test_session_charset_auto_per_table() {
+    tt_env_new types.fixture
+    tt_set_tables "types TDX_DB TYPES" "hashed TDX_DB HASHED" "dated TDX_DB DATED"
+    it_set_unicode TDX_DB.HASHED 2
+    tt_config_set teradata session_charset AUTO
+    tt_config_set extract parallel 3
+    tt_run_ok
+    assert_match "$TDX_OUT" 'Tables[[:space:]]*:[[:space:]]*done=3 failed=0 pending=0'
+    assert_eq UTF8 "$(tt_meta TDX_DB TYPES table session_charset)"
+    assert_eq UTF8 "$(tt_meta TDX_DB HASHED table session_charset)"
+    assert_eq ASCII "$(tt_meta TDX_DB DATED table session_charset)"
+    local n
+    n=$(tt_state TDX_DB.HASHED chunk_count)
+    [ "$n" -gt 1 ] || tt_fail "HASHED chunk_count $n"
+    assert_eq "$n" "$(it_fexp_argv HASHED | grep -c '^@$')" "one fexp call per chunk"
+    assert_eq "$n" "$(it_fexp_argv HASHED | grep -c '^@argv UTF8$')" "every chunk of a UNICODE table: fexp -c UTF8"
+    assert_not_contains "$(it_fexp_argv DATED)" "UTF8" "LATIN-only table: ASCII"
+    assert_contains "$(it_sql_of TYPES)" ".SET SESSION CHARSET 'UTF8';"
+    assert_not_contains "$(it_sql_of TYPES)" "CHARSET 'ASCII'"
+    assert_contains "$(it_sql_of DATED)" ".SET SESSION CHARSET 'ASCII';"
+    assert_not_contains "$(it_sql_of DATED)" "CHARSET 'UTF8'"
+    assert_eq 0 "$(grep -c "CHARSET 'AUTO'" "$TDX_FAKE_LOG_FILE")" "AUTO is never sent to Teradata"
+    assert_contains "$(cat "$TDX_ROOT"/logs/extract_*.log)" "TDX_DB.HASHED: session_charset AUTO -> UTF8"
+}
+
+test_session_charset_auto_non_ascii_name() {
+    tt_env_new types.fixture
+    tt_set_tables "dated TDX_DB DATED"
+    tt_awk -F '\t' -v OFS='\t' '$1 == "TDX_DB.DATED" && $2 == "column" && $3 == 2 { $4 = "PR\303\211NOM" } { print }' \
+        "$TDX_FIXTURE" >"$TDX_FIXTURE.new" && mv -f "$TDX_FIXTURE.new" "$TDX_FIXTURE"
+    tt_config_set teradata session_charset AUTO
+    tt_run_ok
+    assert_eq UTF8 "$(tt_meta TDX_DB DATED table session_charset)" "LATIN columns, non-ASCII column name"
+    assert_eq "PR$(printf '\303\211')NOM" "$(tt_meta TDX_DB DATED column.002 name)"
+    assert_contains "$(it_sql_of DATED)" "\"PR$(printf '\303\211')NOM\""
+    assert_eq 0 "$(grep -c "CHARSET 'ASCII'" "$TDX_FAKE_LOG_FILE")"
+}
+
+test_session_charset_default_auto() {
+    tt_env_new types.fixture
+    tt_set_tables "types TDX_DB TYPES" "dated TDX_DB DATED"
+    grep -v '	session_charset	' "$TDX_FAKE/config.tsv" >"$TDX_FAKE/config.tsv.new"
+    mv -f "$TDX_FAKE/config.tsv.new" "$TDX_FAKE/config.tsv"
+    tt_write_config
+    tt_run_ok
+    assert_eq UTF8 "$(tt_meta TDX_DB TYPES table session_charset)"
+    assert_eq ASCII "$(tt_meta TDX_DB DATED table session_charset)"
+}
+
+test_session_charset_invalid() {
+    tt_env_new
+    tt_config_set teradata session_charset LATIN
+    tt_run
+    assert_rc 2 "$TDX_RC" "$TDX_OUT$TDX_ERR"
+    assert_contains "$TDX_OUT$TDX_ERR" "session_charset must be AUTO, ASCII or UTF8"
+}

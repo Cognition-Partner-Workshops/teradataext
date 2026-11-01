@@ -152,7 +152,7 @@ which is removed at exit.
 For each table:
 
 - `data/<db>_<table>[.partNNN].dat`: pipe-delimited records terminated by LF, ASCII or UTF-8
-  (`session_charset`). Large tables produce one file per chunk (`.part001`, ...).
+  (`session_charset`; the default AUTO picks UTF8 only for tables with UNICODE columns). Large tables produce one file per chunk (`.part001`, ...).
 - `data/<db>_<table>_<cycle_id>.tar.gz`: the table's files, archived with
   `tar cf - ... | gzip -c` and integrity-tested (`gzip -t`, and the member list from
   `gzip -dc | tar tf -` must equal the expected `.dat` names) before the rename to

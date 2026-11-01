@@ -161,7 +161,8 @@ with --config PATH.
   fexp_path          FastExport executable (default fexp). Env TDX_FEXP overrides it.
   bteq_path          BTEQ executable (default bteq). Env TDX_BTEQ overrides it.
   session_charset    AUTO (default), ASCII or UTF8. AUTO chooses per table: UTF8 when
-                     the table has a UNICODE character column (or XML), else ASCII; the
+                     the table has a UNICODE character column (or XML) or a non-ASCII
+                     table/column name, else ASCII; the
                      choice is logged and written to the meta file. Under ASCII, character
                      columns that are not LATIN (e.g. UNICODE) make the table fail. Files
                      are written in the table's session character set.

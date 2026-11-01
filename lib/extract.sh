@@ -39,6 +39,12 @@ tdx_int_or0() {
     REPLY=$(tdx_int "$v")
 }
 
+# rc 0 when $1 has a byte outside printable ASCII
+tdx_non_ascii() {
+    local LC_ALL=C
+    [[ $1 == *[![:print:]]* ]]
+}
+
 tdx_prepare() {
     local key=$1 base fqn dbs tbs i r a
     W_key=$key
@@ -114,11 +120,15 @@ tdx_prepare() {
         if [[ ${a^^} == Y ]]; then C_null[i]=1; else C_null[i]=0; fi
         NCOLS=$i
     done
-    # AUTO: UTF8 for tables with a UNICODE character column (or XML), else ASCII
+    # AUTO: UTF8 for tables with a UNICODE character column, XML or a non-ASCII name, else ASCII
     if [[ $S_session_charset == AUTO ]]; then
         S_session_charset=ASCII
+        tdx_non_ascii "${T_DB[$key]}${T_TABLE[$key]}" && S_session_charset=UTF8
         for ((i = 1; i <= NCOLS; i++)); do
-            if [[ ${C_ct[i]} == 2 || ${C_tc[i]} == XM ]]; then S_session_charset=UTF8; break; fi
+            if [[ ${C_ct[i]} == 2 || ${C_tc[i]} == XM ]] || tdx_non_ascii "${C_name[i]}"; then
+                S_session_charset=UTF8
+                break
+            fi
         done
         tdx_info "$key: session_charset AUTO -> $S_session_charset"
     fi

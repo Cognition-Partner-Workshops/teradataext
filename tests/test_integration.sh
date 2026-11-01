@@ -522,6 +522,19 @@ test_session_charset_auto_per_table() {
     assert_contains "$(cat "$TDX_ROOT"/logs/extract_*.log)" "TDX_DB.HASHED: session_charset AUTO -> UTF8"
 }
 
+test_session_charset_auto_non_ascii_name() {
+    tt_env_new types.fixture
+    tt_set_tables "dated TDX_DB DATED"
+    tt_awk -F '\t' -v OFS='\t' '$1 == "TDX_DB.DATED" && $2 == "column" && $3 == 2 { $4 = "PR\303\211NOM" } { print }' \
+        "$TDX_FIXTURE" >"$TDX_FIXTURE.new" && mv -f "$TDX_FIXTURE.new" "$TDX_FIXTURE"
+    tt_config_set teradata session_charset AUTO
+    tt_run_ok
+    assert_eq UTF8 "$(tt_meta TDX_DB DATED table session_charset)" "LATIN columns, non-ASCII column name"
+    assert_eq "PR$(printf '\303\211')NOM" "$(tt_meta TDX_DB DATED column.002 name)"
+    assert_contains "$(it_sql_of DATED)" "\"PR$(printf '\303\211')NOM\""
+    assert_eq 0 "$(grep -c "CHARSET 'ASCII'" "$TDX_FAKE_LOG_FILE")"
+}
+
 test_session_charset_default_auto() {
     tt_env_new types.fixture
     tt_set_tables "types TDX_DB TYPES" "dated TDX_DB DATED"

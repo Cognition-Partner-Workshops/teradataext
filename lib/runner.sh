@@ -6,11 +6,12 @@ tdx_logon_lines() {
     printf '.LOGON %s/%s,%s;\n' "$S_host" "$TDX_USER" "$TDX_PASSWORD"
 }
 
-# AUTO (charset not yet chosen for the table, i.e. the metadata query) logs on as ASCII.
+# AUTO (charset not yet chosen for the table, i.e. the metadata query) logs on as UTF8, so
+# non-ASCII object and column names arrive intact.
 # tdx_bteq_script SQL1 OUT1 [SQL2 OUT2 ...] -> REPLY
 tdx_bteq_script() {
     local s sql
-    s=".SET SESSION CHARSET '${S_session_charset/AUTO/ASCII}';"$'\n'"$(tdx_logon_lines)"$'\n'
+    s=".SET SESSION CHARSET '${S_session_charset/AUTO/UTF8}';"$'\n'"$(tdx_logon_lines)"$'\n'
     s+=".SET ERROROUT STDOUT;"$'\n'".SET ERRORLEVEL UNKNOWN SEVERITY 8;"$'\n'
     while (($# >= 2)); do
         sql=$(tdx_sql_stmt "$1")
@@ -33,7 +34,7 @@ tdx_sql_stmt() {
 # its own name, so it would never be reused). Keeps TDX_TOOL_ERR/TDX_TOOL_SL of the failure.
 tdx_drop_logtable() {
     local lt=$1 name=$2 err=$TDX_TOOL_ERR sl=$TDX_TOOL_SL s
-    s=".SET SESSION CHARSET '${S_session_charset/AUTO/ASCII}';"$'\n'"$(tdx_logon_lines)"$'\n'
+    s=".SET SESSION CHARSET '${S_session_charset/AUTO/UTF8}';"$'\n'"$(tdx_logon_lines)"$'\n'
     s+="DROP TABLE $lt;"$'\n'".LOGOFF;"$'\n'".QUIT 0;"$'\n'
     tdx_run_tool bteq "$name.droplt" "$s" 1 || tdx_warn "$name: could not drop FastExport log table $lt; drop it by hand"
     TDX_TOOL_ERR=$err

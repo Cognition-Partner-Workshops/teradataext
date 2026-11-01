@@ -266,7 +266,7 @@ LATIN columns) before it is concatenated.
 | cdcmax | max cdc value (`\N` when there are no new rows); integers plain, DATE `YYYY-MM-DD`, TIMESTAMP `YYYY-MM-DD HH:MI:SS.ffffff` |
 | export | the encoded data record (section 8) |
 
-BTEQ script shape (`AUTO`: the metadata query logs on as ASCII, every later query, export
+BTEQ script shape (`AUTO`: the metadata query logs on as UTF8, every later query, export
 and decode of the table uses the charset chosen for it):
 ```
 .SET SESSION CHARSET 'ASCII';
@@ -450,7 +450,8 @@ Every other byte passes through unchanged. Record length is counted in UTF-8 cha
 the table's session charset is UTF8, else in bytes, as before.
 
 session_charset = AUTO (default): chosen per table after its DBC.ColumnsV query (run as
-ASCII): UTF8 when any column has CharType 2 (UNICODE) or is XML, else ASCII. The choice is
+UTF8): UTF8 when any column has CharType 2 (UNICODE) or is XML, or the database, table or a
+column name has a non-ASCII byte, else ASCII. The choice is
 logged, passed to every chunk job of the table (fexp `-c UTF8`, BTEQ `.SET SESSION CHARSET`),
 and written as the meta `session_charset` (ASCII or UTF8, never AUTO).
 

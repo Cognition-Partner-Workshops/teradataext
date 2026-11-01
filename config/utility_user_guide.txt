@@ -160,9 +160,11 @@ with --config PATH.
   credentials_file   Optional credentials file path (section 4). Empty = env vars only.
   fexp_path          FastExport executable (default fexp). Env TDX_FEXP overrides it.
   bteq_path          BTEQ executable (default bteq). Env TDX_BTEQ overrides it.
-  session_charset    ASCII or UTF8. Character columns that are not LATIN (e.g. UNICODE)
-                     make the table fail under ASCII; use UTF8 for them. Files are
-                     written in the session character set.
+  session_charset    AUTO (default), ASCII or UTF8. AUTO chooses per table: UTF8 when
+                     the table has a UNICODE character column (or XML), else ASCII; the
+                     choice is logged and written to the meta file. Under ASCII, character
+                     columns that are not LATIN (e.g. UNICODE) make the table fail. Files
+                     are written in the table's session character set.
   logtable_database  Database for the FastExport .LOGTABLE. Empty = the user's default
                      database. Needs CREATE TABLE rights.
   connect_check      true/false. TCP connect to host:port before starting; failure ends
@@ -503,7 +505,7 @@ session_limit_patterns against your system's message catalog and real fexp/bteq 
 ------------------------------------------------------------------------------------------
 
   * File: data/<db>_<table>[.partNNN].dat; no header line.
-  * Encoding: ASCII (session_charset = ASCII) or UTF-8 (UTF8).
+  * Encoding: ASCII or UTF-8, the table's session character set (meta session_charset).
   * One record per row, fields separated by |, records terminated by LF.
   * NULL is written as \N. A zero-length string or binary value is written as \E.
   * Inside text values, \ | CR and LF are escaped with a preceding \ :
@@ -753,7 +755,7 @@ Table marked failed (exit 1)
     through a view that casts wide text columns shorter.
   * "bc is required for range chunks on this key" - install bc (section 2), or set
     chunk_column to an integer or DATE column.
-  * non-LATIN column with ASCII - set session_charset = UTF8.
+  * non-LATIN column with ASCII - set session_charset = AUTO or UTF8.
   * row count mismatch / raw layout not recognised - check the tool log; report it with
     the work/ script and tool versions.
   * NUL byte in a record - text values have NUL bytes removed automatically, so this

@@ -134,7 +134,7 @@ tdx_job() {
     if [[ $TDX_JOB_KIND == prep ]]; then
         tdx_prepare "$TDX_JOB_KEY"
         tdx_dump_vars NCOLS C_name C_tc C_len C_tot C_frac C_null C_ct R_enc R_rs R_expr R_max R_lob R_emp \
-            R_notes W_lob W_cdc_from W_cdc_to W_cdc_idx W_nchunks >"$env"
+            R_notes W_lob W_cdc_from W_cdc_to W_cdc_idx W_nchunks S_session_charset >"$env"
     else
         # shellcheck disable=SC1090
         source "$env"

@@ -114,6 +114,14 @@ tdx_prepare() {
         if [[ ${a^^} == Y ]]; then C_null[i]=1; else C_null[i]=0; fi
         NCOLS=$i
     done
+    # AUTO: UTF8 for tables with a UNICODE character column (or XML), else ASCII
+    if [[ $S_session_charset == AUTO ]]; then
+        S_session_charset=ASCII
+        for ((i = 1; i <= NCOLS; i++)); do
+            if [[ ${C_ct[i]} == 2 || ${C_tc[i]} == XM ]]; then S_session_charset=UTF8; break; fi
+        done
+        tdx_info "$key: session_charset AUTO -> $S_session_charset"
+    fi
     for ((i = 1; i <= NCOLS; i++)); do
         tdx_build_rule "$i"
         [[ ${R_lob[i]} == 1 ]] && W_lob=1

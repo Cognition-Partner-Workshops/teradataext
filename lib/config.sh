@@ -137,11 +137,11 @@ tdx_load_settings() {
     tdx_get extract file_format pipe-delimited
     [[ ${REPLY,,} == pipe-delimited ]] ||
         tdx_config_error "[extract] file_format $(tdx_repr "${REPLY,,}") not supported (pipe-delimited only)"
-    tdx_get teradata session_charset ASCII
+    tdx_get teradata session_charset AUTO
     S_session_charset=${REPLY^^}
     S_session_charset=${S_session_charset//-/}
-    [[ $S_session_charset == ASCII || $S_session_charset == UTF8 ]] ||
-        tdx_config_error "[teradata] session_charset must be ASCII or UTF8"
+    [[ $S_session_charset == ASCII || $S_session_charset == UTF8 || $S_session_charset == AUTO ]] ||
+        tdx_config_error "[teradata] session_charset must be AUTO, ASCII or UTF8"
     tdx_get_int extract max_sessions 4
     S_max_sessions=$REPLY
     tdx_get_int extract min_sessions 1
